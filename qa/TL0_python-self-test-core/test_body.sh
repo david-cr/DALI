@@ -32,6 +32,7 @@ test_py() {
     python test_coco_tfrecord.py -i 64
     python test_data_containers.py -s -b 20
     python test_data_containers.py -s -b 20 -n
+    python test_shared_mem.py
 }
 
 test_autograph() {
