@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <gtest/gtest.h>
-#include <fstream>
-#include <sstream>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <cstring>
+#include <linux/limits.h>
+
+#include <gtest/gtest.h>
+#include <fstream>
+#include <sstream>
 #include <memory>
 #include <string>
 #include <vector>
 #include <random>
 #include <filesystem>
-#include <linux/limits.h>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -55,6 +55,7 @@ class DaliFileTest : public ::testing::Test {
   static void FreeAlignedBuffer(void* ptr) {
     free(ptr);
   }
+
  protected:
   void SetUp() override {
     // Create test directory with random name
@@ -94,7 +95,8 @@ class DaliFileTest : public ::testing::Test {
     for (int i = 0; i < 8; i++) {
       binary_data[i] = i + 1;
     }
-    binary_stream.write(reinterpret_cast<const char*>(binary_data.data()), binary_data.size());
+    binary_stream.write(reinterpret_cast<const char*>(binary_data.data()),
+                       binary_data.size());
     binary_stream.close();
 
     // Create an empty file
@@ -108,11 +110,13 @@ class DaliFileTest : public ::testing::Test {
     std::ofstream large_stream(large_file, std::ios::binary);
     ASSERT_TRUE(large_stream.is_open());
     std::vector<uint8_t> large_data(1024 * 1024, 0x42);  // 1MB of 0x42
-    large_stream.write(reinterpret_cast<const char*>(large_data.data()), large_data.size());
+    large_stream.write(reinterpret_cast<const char*>(large_data.data()),
+                      large_data.size());
     large_stream.close();
 
     // Create a file with special characters in name
-    std::string special_file = test_dir_ + "/test_file_with_spaces and-dashes.txt";
+    std::string special_file = test_dir_ +
+                              "/test_file_with_spaces and-dashes.txt";
     std::ofstream special_stream(special_file);
     ASSERT_TRUE(special_stream.is_open());
     special_stream << "File with special characters in name\n";
@@ -484,7 +488,7 @@ TEST_F(DaliFileTest, ODirectFileStreamSeekOperations) {
 
     // Test SEEK_END
     odirect_file->SeekRead(-2, SEEK_END);
-    EXPECT_EQ(odirect_file->TellRead(), 4094); // 4096 - 2 = 4094
+    EXPECT_EQ(odirect_file->TellRead(), 4094);  // 4096 - 2 = 4094
 
     // Test TellRead at beginning
     odirect_file->SeekRead(0, SEEK_SET);
@@ -717,12 +721,10 @@ TEST_F(DaliFileTest, ODirectFileStreamClose) {
     auto odirect_file2 = std::make_unique<ODirectFileStream>(file_path);
     EXPECT_EQ(odirect_file2->Size(), 4096);
     odirect_file2->Close();
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 21: ODirectFileStream - Destructor
 TEST_F(DaliFileTest, ODirectFileStreamDestructor) {
   std::string file_path = test_dir_ + "/test_file.bin";
@@ -738,12 +740,10 @@ TEST_F(DaliFileTest, ODirectFileStreamDestructor) {
     auto odirect_file2 = std::make_unique<ODirectFileStream>(file_path);
     EXPECT_EQ(odirect_file2->Size(), 4096);
     odirect_file2->Close();
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 22: ODirectFileStream - Environment Variables (Default Values)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsDefault) {
   // Clear any existing environment variables
@@ -760,12 +760,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsDefault) {
     EXPECT_EQ(alignment, 4096);  // kODirectAlignment
     EXPECT_EQ(len_alignment, 4096);  // kODirectAlignment
     EXPECT_EQ(chunk_size, 2 << 20);  // kODirectChunkSize (2M)
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 23: ODirectFileStream - Environment Variables (Numeric Values)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsNumeric) {
   try {
@@ -786,12 +784,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsNumeric) {
     unsetenv("DALI_ODIRECT_ALIGNMENT");
     unsetenv("DALI_ODIRECT_LEN_ALIGNMENT");
     unsetenv("DALI_ODIRECT_CHUNK_SIZE");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 24: ODirectFileStream - Environment Variables (K Suffix)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsKSuffix) {
   try {
@@ -812,12 +808,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsKSuffix) {
     unsetenv("DALI_ODIRECT_ALIGNMENT");
     unsetenv("DALI_ODIRECT_LEN_ALIGNMENT");
     unsetenv("DALI_ODIRECT_CHUNK_SIZE");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 25: ODirectFileStream - Environment Variables (M Suffix)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsMSuffix) {
   try {
@@ -838,12 +832,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsMSuffix) {
     unsetenv("DALI_ODIRECT_ALIGNMENT");
     unsetenv("DALI_ODIRECT_LEN_ALIGNMENT");
     unsetenv("DALI_ODIRECT_CHUNK_SIZE");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 26: ODirectFileStream - Environment Variables (Invalid Values)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsInvalid) {
   try {
@@ -930,12 +922,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsInvalid) {
     unsetenv("DALI_ODIRECT_ALIGNMENT");
     unsetenv("DALI_ODIRECT_LEN_ALIGNMENT");
     unsetenv("DALI_ODIRECT_CHUNK_SIZE");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 27: ODirectFileStream - Environment Variables (Empty String)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsEmpty) {
   try {
@@ -948,12 +938,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsEmpty) {
 
     // Clean up
     unsetenv("DALI_ODIRECT_ALIGNMENT");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 27b: ODirectFileStream - Environment Variables (Boundary Values)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsBoundary) {
   try {
@@ -987,12 +975,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsBoundary) {
 
     // Clean up
     unsetenv("DALI_ODIRECT_ALIGNMENT");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 27c: ODirectFileStream - Environment Variables (Edge Cases)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsEdgeCases) {
   try {
@@ -1047,12 +1033,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsEdgeCases) {
 
     // Clean up
     unsetenv("DALI_ODIRECT_ALIGNMENT");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 27d: ODirectFileStream - Environment Variables (Len Alignment Validation)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsLenAlignment) {
   try {
@@ -1089,12 +1073,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsLenAlignment) {
 
     // Clean up
     unsetenv("DALI_ODIRECT_LEN_ALIGNMENT");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 27e: ODirectFileStream - Environment Variables (Chunk Size with Custom Len Alignment)
 TEST_F(DaliFileTest, ODirectFileStreamEnvVarsChunkSizeWithCustomLenAlignment) {
   try {
@@ -1131,12 +1113,10 @@ TEST_F(DaliFileTest, ODirectFileStreamEnvVarsChunkSizeWithCustomLenAlignment) {
     // Clean up
     unsetenv("DALI_ODIRECT_LEN_ALIGNMENT");
     unsetenv("DALI_ODIRECT_CHUNK_SIZE");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 28: ODirectFileStream - Read Error Conditions
 TEST_F(DaliFileTest, ODirectFileStreamReadErrors) {
   std::string file_path = test_dir_ + "/test_file.bin";
@@ -1164,7 +1144,6 @@ TEST_F(DaliFileTest, ODirectFileStreamReadErrors) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
 }
-
 // Test 29: ODirectFileStream - Multiple Operations Sequence
 TEST_F(DaliFileTest, ODirectFileStreamMultipleOperations) {
   std::string file_path = test_dir_ + "/test_file.bin";
@@ -1298,7 +1277,6 @@ TEST_F(DaliFileTest, S3FileStreamBasic) {
     auto object_location5 = s3_filesystem::parse_uri("s3://bucket");
     EXPECT_EQ(object_location5.bucket, "bucket");
     EXPECT_EQ(object_location5.object, "");
-
   } catch (const std::exception& e) {
     // S3 functionality might not be available
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
@@ -1566,7 +1544,9 @@ TEST_F(DaliFileTest, S3FileStreamErrorHandling) {
                                " object=" + object + ":\n" + error_name +
                                ": " + error_message;
 
-  EXPECT_EQ(expected_error, "S3 Object not found. bucket=test-bucket object=nonexistent-object:\nNoSuchKey: The specified key does not exist.");
+    EXPECT_EQ(expected_error,
+            "S3 Object not found. bucket=test-bucket object=nonexistent-object:\n"
+            "NoSuchKey: The specified key does not exist.");
 
   // Test generic S3 error
   error_name = "AccessDenied";
@@ -1595,12 +1575,10 @@ TEST_F(DaliFileTest, S3FileStreamUriEdgeCases) {
     auto object_location3 = s3_filesystem::parse_uri("s3://test-bucket:443/object");
     EXPECT_EQ(object_location3.bucket, "test-bucket:443");
     EXPECT_EQ(object_location3.object, "object");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
 }
-
 // Test 42: S3FileStream - PerObjectCallable Functionality
 TEST_F(DaliFileTest, S3FileStreamPerObjectCallable) {
   // Test the PerObjectCallable functionality
@@ -1649,7 +1627,6 @@ TEST_F(DaliFileTest, S3FileStreamPaginationLogic) {
       is_truncated = false;
       continuation_token = "";
     }
-
   } while (is_truncated);
 
   EXPECT_EQ(call_count, 2);
@@ -1922,7 +1899,9 @@ TEST_F(DaliFileTest, S3FileStreamGetStatsErrorMessage) {
                                " object=" + object + ":\n" + error_name +
                                ": " + error_message;
 
-  EXPECT_EQ(expected_error, "S3 Object not found. bucket=test-bucket object=test-object:\nNoSuchKey: The specified key does not exist.");
+  EXPECT_EQ(expected_error,
+            "S3 Object not found. bucket=test-bucket object=test-object:\n"
+            "NoSuchKey: The specified key does not exist.");
 }
 
 // Test 58: S3FileStream - Read Object Contents Byte Range Generation
@@ -2070,7 +2049,6 @@ TEST_F(DaliFileTest, S3FileStreamListObjectsPagination) {
       continuation_token = "";
       results.push_back("object3");
     }
-
   } while (is_truncated);
 
   EXPECT_EQ(call_count, 2);
@@ -2333,9 +2311,10 @@ TEST_F(DaliFileTest, S3FileStreamGetStatsCoverage) {
       std::string expected_error = "S3 Object not found. bucket=" + bucket +
                                    " object=" + object + ":\n" + error_name +
                                    ": " + error_message;
-      EXPECT_EQ(expected_error, "S3 Object not found. bucket=test-bucket object=test-object:\nNoSuchKey: The specified key does not exist.");
+      EXPECT_EQ(expected_error,
+                "S3 Object not found. bucket=test-bucket object=test-object:\n"
+                "NoSuchKey: The specified key does not exist.");
     }
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -2360,7 +2339,8 @@ TEST_F(DaliFileTest, S3FileStreamReadObjectContentsCoverage) {
     EXPECT_EQ(byte_range_str, "bytes=100-299");
 
     // Test DomainTimeRange creation pattern
-    std::string time_range_name = make_string("read_object_contents @ ", object_location.object, " ",
+    std::string time_range_name = make_string("read_object_contents @ ",
+                                             object_location.object, " ",
                                              byte_range_str, " (", n, ")");
     EXPECT_EQ(time_range_name, "read_object_contents @ test-object bytes=100-299 (200)");
 
@@ -2377,7 +2357,8 @@ TEST_F(DaliFileTest, S3FileStreamReadObjectContentsCoverage) {
     size_t buffer_size = n;
     uint8_t* buffer = new uint8_t[buffer_size];
 
-    // Simulate the pattern: Aws::Utils::Stream::PreallocatedStreamBuf streambuf(buffer, buffer_size);
+    // Simulate the pattern: Aws::Utils::Stream::PreallocatedStreamBuf streambuf(buffer,
+    // buffer_size);
     // Test buffer access
     for (size_t i = 0; i < buffer_size; i++) {
       buffer[i] = static_cast<uint8_t>(i % 256);
@@ -2413,7 +2394,6 @@ TEST_F(DaliFileTest, S3FileStreamReadObjectContentsCoverage) {
     }
 
     delete[] buffer;
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -2506,7 +2486,6 @@ TEST_F(DaliFileTest, S3FileStreamListObjectsCoverage) {
 
         per_object_call("object3.txt", 4096);
       }
-
     } while (is_truncated);
 
     EXPECT_EQ(call_count, 2);
@@ -2528,7 +2507,6 @@ TEST_F(DaliFileTest, S3FileStreamListObjectsCoverage) {
       std::string expected_error = error_name + ": " + error_message;
       EXPECT_EQ(expected_error, "AccessDenied: Access denied");
     }
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -2553,7 +2531,8 @@ TEST_F(DaliFileTest, S3FileStreamSelectedFunctionsEdgeCases) {
     std::stringstream ss;
     ss << "bytes=" << offset << "-" << offset + n - 1;
     std::string byte_range_str = ss.str();
-    EXPECT_EQ(byte_range_str, "bytes=0-18446744073709551615");  // Edge case: size_t overflow when n=0
+    EXPECT_EQ(byte_range_str,
+              "bytes=0-18446744073709551615");  // Edge case: size_t overflow when n=0
 
     // Test read_object_contents with large values
     offset = 1000000;
@@ -2577,7 +2556,6 @@ TEST_F(DaliFileTest, S3FileStreamSelectedFunctionsEdgeCases) {
       prefix.push_back('/');
     }
     EXPECT_EQ(prefix.length(), 501);  // 500 'b's + '/'
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -2592,7 +2570,8 @@ TEST_F(DaliFileTest, S3FileStreamSelectedFunctionsMemoryPatterns) {
     size_t buffer_size = 4096;
     uint8_t* buffer = new uint8_t[buffer_size];
 
-    // Simulate the exact pattern: Aws::Utils::Stream::PreallocatedStreamBuf streambuf(buffer, buffer_size);
+    // Simulate the exact pattern: Aws::Utils::Stream::PreallocatedStreamBuf streambuf(buffer,
+    // buffer_size);
     // Test buffer initialization
     for (size_t i = 0; i < buffer_size; i++) {
       buffer[i] = 0;
@@ -2628,7 +2607,6 @@ TEST_F(DaliFileTest, S3FileStreamSelectedFunctionsMemoryPatterns) {
     EXPECT_TRUE(io_stream_created);
 
     delete[] test_buffer;
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -2649,7 +2627,9 @@ TEST_F(DaliFileTest, S3FileStreamSelectedFunctionsErrorMessages) {
                                   " object=" + object + ":\n" + error_name +
                                   ": " + error_message;
 
-    EXPECT_EQ(get_stats_error, "S3 Object not found. bucket=test-bucket object=test-object:\nNoSuchKey: The specified key does not exist.");
+    EXPECT_EQ(get_stats_error,
+              "S3 Object not found. bucket=test-bucket object=test-object:\n"
+              "NoSuchKey: The specified key does not exist.");
 
     // Test read_object_contents error message pattern
     std::string read_error = error_name + ": " + error_message;
@@ -2667,14 +2647,15 @@ TEST_F(DaliFileTest, S3FileStreamSelectedFunctionsErrorMessages) {
                       " object=" + object + ":\n" + error_name +
                       ": " + error_message;
 
-    EXPECT_EQ(get_stats_error, "S3 Object not found. bucket=test-bucket object=test-object:\nAccessDenied: Access denied");
+    EXPECT_EQ(get_stats_error,
+              "S3 Object not found. bucket=test-bucket object=test-object:\n"
+              "AccessDenied: Access denied");
 
     read_error = error_name + ": " + error_message;
     EXPECT_EQ(read_error, "AccessDenied: Access denied");
 
     list_error = error_name + ": " + error_message;
     EXPECT_EQ(list_error, "AccessDenied: Access denied");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -2728,7 +2709,6 @@ TEST_F(DaliFileTest, S3FileStreamSelectedFunctionsRequestConfig) {
     std::string continuation_token = "token123";
     // Simulate: list_obj_req.SetContinuationToken(continuation_token.c_str());
     EXPECT_EQ(continuation_token, "token123");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -2792,7 +2772,6 @@ TEST_F(DaliFileTest, S3FileStreamSelectedFunctionsOutcomeHandling) {
       EXPECT_EQ(error_name, "NoSuchKey");
       EXPECT_EQ(error_message, "The specified key does not exist.");
     }
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -2838,14 +2817,12 @@ TEST_F(DaliFileTest, S3FileStreamSelectedFunctionsContentProcessing) {
     size_t content_length = 1024;
     bool exists = true;
 
-    // Simulate the pattern: stats.size = stats.exists ? head_object_outcome.GetResult().GetContentLength() : 0;
     size_t size = exists ? content_length : 0;
     EXPECT_EQ(size, 1024);
 
     exists = false;
     size = exists ? content_length : 0;
     EXPECT_EQ(size, 0);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -2941,7 +2918,6 @@ TEST_F(DaliFileTest, S3FileStreamCompleteFunctionCoverage) {
       std::string error = error_name + ": " + error_message;
       EXPECT_EQ(error, "NoSuchKey: The specified key does not exist.");
     }
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -3025,7 +3001,9 @@ TEST_F(DaliFileTest, S3FileStreamComprehensiveGetStatsCoverage) {
                                  " object=" + object + ":\n" + error_name +
                                  ": " + error_message;
 
-    EXPECT_EQ(expected_error, "S3 Object not found. bucket=test-bucket object=test-object:\nNoSuchKey: The specified key does not exist.");
+    EXPECT_EQ(expected_error,
+              "S3 Object not found. bucket=test-bucket object=test-object:\n"
+              "NoSuchKey: The specified key does not exist.");
 
     // Test with different error types
     error_name = "AccessDenied";
@@ -3035,7 +3013,9 @@ TEST_F(DaliFileTest, S3FileStreamComprehensiveGetStatsCoverage) {
                      " object=" + object + ":\n" + error_name +
                      ": " + error_message;
 
-    EXPECT_EQ(expected_error, "S3 Object not found. bucket=test-bucket object=test-object:\nAccessDenied: Access denied");
+    EXPECT_EQ(expected_error,
+              "S3 Object not found. bucket=test-bucket object=test-object:\n"
+              "AccessDenied: Access denied");
 
     // Test 7: Test HeadObjectRequest configuration pattern (from get_stats)
     // Simulate the exact pattern from get_stats:
@@ -3046,7 +3026,6 @@ TEST_F(DaliFileTest, S3FileStreamComprehensiveGetStatsCoverage) {
     EXPECT_EQ(object, "test-object");
 
     // Test 8: Test response stream factory pattern (from get_stats)
-    // Simulate: head_object_req.SetResponseStreamFactory([]() { return Aws::New<Aws::StringStream>(kAllocationTag); });
     auto response_stream_factory = []() {
       // In real code: return Aws::New<Aws::StringStream>(kAllocationTag);
       return true;  // Simulate successful stream creation
@@ -3062,7 +3041,8 @@ TEST_F(DaliFileTest, S3FileStreamComprehensiveGetStatsCoverage) {
       // Simulate: stats.exists = true;
       stats.exists = true;
 
-      // Simulate: stats.size = stats.exists ? head_object_outcome.GetResult().GetContentLength() : 0;
+      // Simulate: stats.size = stats.exists ? head_object_outcome.GetResult().GetContentLength() :
+      // 0;
       size_t content_length = 1024;  // Mock GetContentLength()
       stats.size = stats.exists ? content_length : 0;
 
@@ -3132,7 +3112,6 @@ TEST_F(DaliFileTest, S3FileStreamComprehensiveGetStatsCoverage) {
     test_stats.size = test_stats.exists ? test_content_length : 0;
     EXPECT_EQ(test_stats.exists, true);
     EXPECT_EQ(test_stats.size, 2048);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -3194,7 +3173,6 @@ TEST_F(DaliFileTest, S3FileStreamMockedGetStatsCoverage) {
       // Simulate: stats.exists = true; (line 62 in get_stats)
       stats.exists = true;
 
-      // Simulate: stats.size = stats.exists ? head_object_outcome.GetResult().GetContentLength() : 0; (line 63 in get_stats)
       size_t mock_content_length = 1024;  // Mock GetContentLength()
       stats.size = stats.exists ? mock_content_length : 0;
 
@@ -3205,12 +3183,6 @@ TEST_F(DaliFileTest, S3FileStreamMockedGetStatsCoverage) {
     // Test 4: Mock failed HeadObject outcome (covers lines 58-61 in get_stats)
     mock_success = false;
     if (!mock_success) {
-      // Simulate the error handling pattern from get_stats:
-      // const Aws::S3::S3Error& err = head_object_outcome.GetError();
-      // throw std::runtime_error("S3 Object not found. bucket=" + object_location.bucket +
-      //                          " object=" + object_location.object + ":\n" + err.GetExceptionName() +
-      //                          ": " + err.GetMessage());
-
       std::string mock_error_name = "NoSuchKey";
       std::string mock_error_message = "The specified key does not exist.";
 
@@ -3218,7 +3190,9 @@ TEST_F(DaliFileTest, S3FileStreamMockedGetStatsCoverage) {
                                    " object=" + object + ":\n" + mock_error_name +
                                    ": " + mock_error_message;
 
-      EXPECT_EQ(expected_error, "S3 Object not found. bucket=test-bucket object=test-object.txt:\nNoSuchKey: The specified key does not exist.");
+      EXPECT_EQ(expected_error,
+                "S3 Object not found. bucket=test-bucket object=test-object.txt:\n"
+                "NoSuchKey: The specified key does not exist.");
 
       // Test with different error types
       mock_error_name = "AccessDenied";
@@ -3228,7 +3202,9 @@ TEST_F(DaliFileTest, S3FileStreamMockedGetStatsCoverage) {
                        " object=" + object + ":\n" + mock_error_name +
                        ": " + mock_error_message;
 
-      EXPECT_EQ(expected_error, "S3 Object not found. bucket=test-bucket object=test-object.txt:\nAccessDenied: Access denied");
+      EXPECT_EQ(expected_error,
+                "S3 Object not found. bucket=test-bucket object=test-object.txt:\n"
+                "AccessDenied: Access denied");
     }
 
     // Test 5: Test content length edge cases with mocked data
@@ -3291,12 +3267,10 @@ TEST_F(DaliFileTest, S3FileStreamMockedGetStatsCoverage) {
     // The function returns stats, so we verify the final state
     EXPECT_EQ(stats.exists, true);
     EXPECT_EQ(stats.size, 16384);  // Last value from the loop above
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
 }
-
 // Test 83: S3FileStream - Mocked Read Object Contents Function Coverage
 TEST_F(DaliFileTest, S3FileStreamMockedReadObjectContentsCoverage) {
   // Test read_object_contents function with mocked data (avoiding actual S3 calls)
@@ -3387,12 +3361,10 @@ TEST_F(DaliFileTest, S3FileStreamMockedReadObjectContentsCoverage) {
     mock_error_message = "The specified key does not exist.";
     expected_error = mock_error_name + ": " + mock_error_message;
     EXPECT_EQ(expected_error, "NoSuchKey: The specified key does not exist.");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
 }
-
 // Test 84: S3FileStream - Constructor with Size Parameter
 TEST_F(DaliFileTest, S3FileStreamConstructorWithSizeParameter) {
   // Test S3FileStream constructor with size parameter
@@ -3431,12 +3403,10 @@ TEST_F(DaliFileTest, S3FileStreamConstructorWithSizeParameter) {
 
     EXPECT_EQ(large_stats.exists, true);
     EXPECT_EQ(large_stats.size, 1024 * 1024 * 100);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
 }
-
 // Test 85: S3FileStream - Constructor without Size Parameter
 TEST_F(DaliFileTest, S3FileStreamConstructorWithoutSizeParameter) {
   // Test S3FileStream constructor without size parameter
@@ -3466,12 +3436,10 @@ TEST_F(DaliFileTest, S3FileStreamConstructorWithoutSizeParameter) {
 
     EXPECT_EQ(non_existent_stats.exists, false);
     EXPECT_EQ(non_existent_stats.size, 0);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
 }
-
 // Test 86: S3FileStream - Read Method with Zero Bytes
 TEST_F(DaliFileTest, S3FileStreamReadZeroBytes) {
   // Test S3FileStream Read method with zero bytes
@@ -3496,12 +3464,10 @@ TEST_F(DaliFileTest, S3FileStreamReadZeroBytes) {
     pos += bytes_read;  // Position should advance
     EXPECT_EQ(bytes_read, 200);
     EXPECT_EQ(pos, 300);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
 }
-
 // Test 87: S3FileStream - SeekRead with Invalid Whence
 TEST_F(DaliFileTest, S3FileStreamSeekReadInvalidWhence) {
   // Test S3FileStream SeekRead with invalid whence values
@@ -3536,7 +3502,6 @@ TEST_F(DaliFileTest, S3FileStreamSeekReadInvalidWhence) {
 
     // Test that invalid whence is detected
     EXPECT_EQ(invalid_whence, 999);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -3592,7 +3557,6 @@ TEST_F(DaliFileTest, S3FileStreamSeekReadBoundaryConditions) {
     }
     pos = new_pos;
     EXPECT_EQ(pos, 1014);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -3638,7 +3602,6 @@ TEST_F(DaliFileTest, S3FileStreamConstructorErrorHandling) {
 
     EXPECT_EQ(stats.exists, false);
     EXPECT_EQ(stats.size, 0);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -3718,7 +3681,6 @@ TEST_F(DaliFileTest, S3FileStreamCompleteIntegration) {
     // In real implementation: s3_stream.Close();
     bool close_called = true;
     EXPECT_TRUE(close_called);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -3760,11 +3722,13 @@ TEST_F(DaliFileTest, S3FileStreamEdgeCasesAndStress) {
     std::string special_uri = "s3://test-bucket/object@#$%^&*()_+-=[]{}|;':\",./<>?";
     s3_filesystem::S3ObjectLocation special_location = s3_filesystem::parse_uri(special_uri);
     EXPECT_EQ(special_location.bucket, "test-bucket");
-    EXPECT_EQ(special_location.object, "object@#$%^&*()_+-=[]{}|;':\",./<>");
+    EXPECT_EQ(special_location.object,
+              "object@#$%^&*()_+-=[]{}|;':\",./<>");
 
     // Test with empty bucket name
     std::string empty_bucket_uri = "s3:///object.txt";
-    s3_filesystem::S3ObjectLocation empty_bucket_location = s3_filesystem::parse_uri(empty_bucket_uri);
+    s3_filesystem::S3ObjectLocation empty_bucket_location =
+        s3_filesystem::parse_uri(empty_bucket_uri);
     EXPECT_EQ(empty_bucket_location.bucket, "");
     EXPECT_EQ(empty_bucket_location.object, "object.txt");
 
@@ -3773,7 +3737,6 @@ TEST_F(DaliFileTest, S3FileStreamEdgeCasesAndStress) {
     s3_filesystem::S3ObjectLocation minimal_location = s3_filesystem::parse_uri(minimal_uri);
     EXPECT_EQ(minimal_location.bucket, "bucket");
     EXPECT_EQ(minimal_location.object, "");
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -3806,7 +3769,6 @@ TEST_F(DaliFileTest, S3FileStreamMemoryManagement) {
 
       EXPECT_EQ(pos, 100);
       EXPECT_EQ(bytes_read, 100);
-
       // Destructor should be called here (no explicit cleanup needed)
     }  // End of scope - destructor called
 
@@ -3840,7 +3802,6 @@ TEST_F(DaliFileTest, S3FileStreamMemoryManagement) {
       EXPECT_EQ(stats_list[i].exists, true);
       EXPECT_EQ(stats_list[i].size, 1024);
     }
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -3899,7 +3860,6 @@ TEST_F(DaliFileTest, S3FileStreamErrorRecovery) {
     pos += bytes_read;
     EXPECT_EQ(bytes_read, 0);
     EXPECT_EQ(pos, pos_before);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3 functionality not available: " << e.what();
   }
@@ -3927,7 +3887,6 @@ TEST_F(DaliFileTest, S3FileStreamRealConstructorAndBasicMethods) {
 
     // Test TellRead after close (should still be 0)
     EXPECT_EQ(s3_stream.TellRead(), 0);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
@@ -3966,7 +3925,6 @@ TEST_F(DaliFileTest, S3FileStreamRealSeekReadVariations) {
     // Test SEEK_END to end
     s3_stream.SeekRead(0, SEEK_END);
     EXPECT_EQ(s3_stream.TellRead(), 2048);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
@@ -4011,7 +3969,6 @@ TEST_F(DaliFileTest, S3FileStreamRealSeekReadBoundaryConditions) {
     EXPECT_THROW({
       s3_stream.SeekRead(25, SEEK_CUR);  // This would go beyond end
     }, std::out_of_range);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
@@ -4038,7 +3995,6 @@ TEST_F(DaliFileTest, S3FileStreamRealSeekReadInvalidWhence) {
 
     // If we get here, the invalid whence was handled gracefully
     // This is acceptable behavior in release builds
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
@@ -4069,7 +4025,6 @@ TEST_F(DaliFileTest, S3FileStreamRealReadMethodEdgeCases) {
     // Note: We skip testing actual Read operations with null client
     // as they would cause segmentation faults when calling s3_filesystem::read_object_contents
     // The seeking tests above verify the method logic without S3 calls
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
@@ -4100,7 +4055,6 @@ TEST_F(DaliFileTest, S3FileStreamRealConstructorErrorHandling) {
     EXPECT_THROW({
       S3FileStream s3_stream(null_client, empty_uri, 1024);
     }, std::exception);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
@@ -4144,7 +4098,6 @@ TEST_F(DaliFileTest, S3FileStreamRealCompleteIntegration) {
     // Test that methods still work after close
     EXPECT_EQ(s3_stream.Size(), 2048);
     EXPECT_EQ(s3_stream.TellRead(), 1948);  // Position should be preserved
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
@@ -4180,7 +4133,6 @@ TEST_F(DaliFileTest, S3FileStreamRealEdgeCasesAndStress) {
     std::string special_uri = "s3://test-bucket/object@#$%^&*()_+-=[]{}|;':\",./<>?";
     S3FileStream special_stream(null_client, special_uri, 1024);
     EXPECT_EQ(special_stream.Size(), 1024);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
@@ -4238,7 +4190,6 @@ TEST_F(DaliFileTest, S3FileStreamRealMemoryManagement) {
     EXPECT_EQ(streams[0]->TellRead(), 100);
     EXPECT_EQ(streams[1]->TellRead(), 200);
     EXPECT_EQ(streams[2]->TellRead(), 300);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
@@ -4281,10 +4232,8 @@ TEST_F(DaliFileTest, S3FileStreamRealErrorRecovery) {
     size_t bytes_read = s3_stream.Read(buffer, 0);
     EXPECT_EQ(bytes_read, 0);
     EXPECT_EQ(s3_stream.TellRead(), 0);
-
   } catch (const std::exception& e) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
 }
-
 }  // namespace dali

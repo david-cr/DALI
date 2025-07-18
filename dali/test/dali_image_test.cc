@@ -12,19 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <gtest/gtest.h>
-#include <fstream>
-#include <sstream>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <cstring>
+#include <linux/limits.h>
+#include <string.h>
+
+#include <gtest/gtest.h>
+#include <fstream>
+#include <sstream>
 #include <memory>
 #include <string>
 #include <vector>
 #include <random>
 #include <filesystem>
-#include <linux/limits.h>
 
 #include "dali/util/image.h"
 #include "dali/pipeline/data/tensor_list.h"
@@ -60,9 +61,12 @@ class DaliImageTest : public ::testing::Test {
   void CreateTestImages() {
     // Create a simple test image (raw RGB data)
     std::vector<uint8_t> test_image_data = {
-      255, 0, 0,    0, 255, 0,    0, 0, 255,    255, 255, 0,  // Red, Green, Blue, Yellow
-      0, 255, 255,  255, 0, 255,  128, 128, 128, 0, 0, 0,      // Cyan, Magenta, Gray, Black
-      255, 255, 255, 64, 64, 64,   192, 192, 192, 128, 0, 128  // White, Dark Gray, Light Gray, Purple
+      // Red, Green, Blue, Yellow
+      255, 0, 0,    0, 255, 0,    0, 0, 255,    255, 255, 0,
+      // Cyan, Magenta, Gray, Black
+      0, 255, 255,  255, 0, 255,  128, 128, 128, 0, 0, 0,
+      // White, Dark Gray, Light Gray, Purple
+      255, 255, 255, 64, 64, 64,   192, 192, 192, 128, 0, 128
     };
 
     // Create JPEG test file
@@ -711,7 +715,8 @@ TEST_F(DaliImageTest, SymbolicLinkHandling) {
   // The is_empty_file function checks if file size <= 1, so we need at least 2 bytes
   std::ofstream target(target_file);
   ASSERT_TRUE(target.is_open());
-  target << "test data for symlink - this should be enough content to make it non-empty and pass the empty file filter";
+  target << "test data for symlink - this should be enough content to make it "
+         << "non-empty and pass the empty file filter";
   target.close();
 
   // Create symbolic link
@@ -819,7 +824,8 @@ TEST_F(DaliImageTest, WriteImageScaleBiasTemplateTesting) {
   std::vector<uint8_t> image_data = {100, 150, 200, 50, 100, 150};
   std::string output_file = test_dir_ + "/template_test_cpu";
 
-  WriteImageScaleBias<CPUBackend, uint8_t>(image_data.data(), 2, 1, 3, 0.0f, 1.0f, output_file, outHWCImage);
+  WriteImageScaleBias<CPUBackend, uint8_t>(
+      image_data.data(), 2, 1, 3, 0.0f, 1.0f, output_file, outHWCImage);
 
   // Verify file was created
   std::ifstream file(output_file + ".ppm");
@@ -961,7 +967,7 @@ TEST_F(DaliImageTest, ComprehensiveIntegrationTest) {
   TensorList<CPUBackend> tl;
   TensorListShape<> shape(2, 3);
   shape.set_tensor_shape(0, {8, 8, 3});   // 8x8 RGB image
-  shape.set_tensor_shape(1, {10, 10, 3}); // 10x10 RGB image
+  shape.set_tensor_shape(1, {10, 10, 3});  // 10x10 RGB image
   tl.Resize(shape, DALI_UINT8);
 
   // Fill with test image data
@@ -1057,7 +1063,7 @@ TEST_F(DaliImageTest, ListFilesCoreLogic) {
 
   std::ofstream small_jpg_file(small_jpg);
   ASSERT_TRUE(small_jpg_file.is_open());
-  small_jpg_file << "X";  // 1 byte file (should be filtered out by is_empty_file)
+  small_jpg_file << "X";   // 1 byte file (should be filtered out by is_empty_file)
   small_jpg_file.close();
 
   // Create files with supported extensions and valid content (should be included)
