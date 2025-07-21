@@ -47,7 +47,7 @@ std::string GenerateTempPath() {
 // Helper function to write header length in little-endian format
 void WriteHeaderLength(std::string& file_data, uint16_t header_len) {
   file_data += static_cast<char>(header_len & 0xFF);        // low byte
-  file_data += static_cast<char>((header_len >> 8) & 0xFF); // high byte
+  file_data += static_cast<char>((header_len >> 8) & 0xFF);  // high byte
 }
 
 // Mock classes for testing
@@ -120,7 +120,8 @@ std::string CreateNumpyHeader(const TensorShape<>& shape, DALIDataType type, boo
 
   std::string fortran_str = fortran_order ? "True" : "False";
 
-  return "{'descr': " + descr + ", 'fortran_order': " + fortran_str + ", 'shape': " + shape_str + ",}";
+  return "{'descr': " + descr + ", 'fortran_order': " + fortran_str +
+         ", 'shape': " + shape_str + "}";
 }
 
 std::string CreateNumpyFile(const TensorShape<>& shape, DALIDataType type, bool fortran_order) {
@@ -143,7 +144,7 @@ std::string CreateNumpyFile(const TensorShape<>& shape, DALIDataType type, bool 
   std::string file_data;
   file_data += magic;
   file_data += static_cast<char>(version);
-  file_data += static_cast<char>(0); // minor version
+  file_data += static_cast<char>(0);  // minor version
   file_data += static_cast<char>(header_len & 0xFF);
   file_data += static_cast<char>((header_len >> 8) & 0xFF);
   file_data += header;
@@ -166,7 +167,8 @@ TEST(NumpyLoaderComprehensiveTest, ParseHeaderContents) {
 
   // Test with spaces and different formatting
   HeaderData target2;
-  ParseHeaderContents(target2, "  {  'descr' : '<f4'   ,   'fortran_order'  : False, 'shape' : (4,)}");
+  ParseHeaderContents(target2,
+     R"({  'descr' : '<f4'   ,   'fortran_order'  : False, 'shape' : (4,)})");
   EXPECT_EQ(target2.type(), DALI_FLOAT);
   EXPECT_EQ(target2.fortran_order, false);
   EXPECT_EQ(target2.shape, TensorShape<>(4));
@@ -200,26 +202,32 @@ TEST(NumpyLoaderComprehensiveTest, ParseHeaderContentsMalformedEscapes) {
   HeaderData target;
 
   // Test with incomplete escape sequence at end of string (should be treated as literal backslash)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'incomplete\\'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'incomplete\\'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escape sequence followed by null terminator (should be treated as literal backslash)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'bad\\'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'bad\\'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with malformed string that has no closing quote (should throw)
-  // The parser only processes required fields (descr, fortran_order, shape), so we need to put the unclosed string in a required field
-  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2"), std::runtime_error);
+  // The parser only processes required fields (descr, fortran_order, shape),
+  // so we need to put the unclosed string in a required field
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2})"), std::runtime_error);
 
   // Test with escape sequence in descr field that's malformed (should throw)
-  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4\\','fortran_order':False,'shape':(2,3)}"), std::runtime_error);
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4\\','fortran_order':False,'shape':(2,3)})"), std::runtime_error);
 
   // Test with escape sequence in fortran_order field (should throw)
-  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4','fortran_order':'Fals\\e','shape':(2,3)}"), std::runtime_error);
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':'Fals\\e','shape':(2,3)})"), std::runtime_error);
 }
 
 // Test that incomplete escape sequences are treated as literal characters
@@ -227,19 +235,22 @@ TEST(NumpyLoaderComprehensiveTest, IncompleteEscapeSequences) {
   HeaderData target;
 
   // Test with backslash at end of string (should be treated as literal backslash)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'test':'literal\\'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'test':'literal\\'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with backslash followed by unknown character (should preserve both)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'test':'unknown\\xescape'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'test':'unknown\\xescape'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with backslash followed by end of string (should be treated as literal backslash)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'test':'end\\'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'test':'end\\'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
@@ -250,13 +261,16 @@ TEST(NumpyLoaderComprehensiveTest, UnclosedStringExceptions) {
   HeaderData target;
 
   // Test with unclosed string in descr field (required field)
-  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4"), std::runtime_error);
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4})"), std::runtime_error);
 
   // Test with unclosed string in fortran_order field (required field)
-  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4','fortran_order':'Fals"), std::runtime_error);
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':'Fals})"), std::runtime_error);
 
   // Test with unclosed string in shape field (required field)
-  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2"), std::runtime_error);
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2})"), std::runtime_error);
 }
 
 // Test ParseHeaderContents with escaped characters in strings
@@ -264,37 +278,43 @@ TEST(NumpyLoaderComprehensiveTest, ParseHeaderContentsEscapedChars) {
   HeaderData target;
 
   // Test with escaped backslash
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'path\\\\to\\\\file'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'path\\\\to\\\\file'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escaped single quote
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'don\\'t fail'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'don\\'t fail'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escaped tab
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'tab\\tseparated'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'tab\\tseparated'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escaped newline
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'line1\\nline2'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'line1\\nline2'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escaped double quote
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'quote\\\"here'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'quote\\\"here'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with unknown escape sequence (should preserve backslash and character)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'unknown\\xescape'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'unknown\\xescape'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
@@ -305,31 +325,36 @@ TEST(NumpyLoaderComprehensiveTest, ParseHeaderContentsComplexEscapes) {
   HeaderData target;
 
   // Test with multiple escape sequences in one string
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'complex\\'string\\nwith\\tmultiple\\\"escapes\\\\'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'comment':'complex\\'string\\nwith\\tmultiple\\\"escapes\\\\'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escape sequences in descr field
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'field':'value\\'with\\'quotes'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'field':'value\\'with\\'quotes'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escape sequences in shape description
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'desc':'shape\\nwith\\tnewlines'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'desc':'shape\\nwith\\tnewlines'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with consecutive backslashes
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'path':'C:\\\\\\\\temp\\\\\\\\file'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'path':'C:\\\\\\\\temp\\\\\\\\file'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escape sequences at string boundaries
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'start':'\\'begin','end':'end\\''}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'start':'\\'begin','end':'end\\\"'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
@@ -340,31 +365,36 @@ TEST(NumpyLoaderComprehensiveTest, StringParsingEscapeSequences) {
   HeaderData target;
 
   // Test all supported escape sequences in a single header
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'test':'\\\\\\'\\t\\n\\\"'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'test':'\\\'\\t\\n\\\"'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test escape sequences in different field positions
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'first':'\\'start','middle':'mid\\tdle','last':'end\\\"'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'first':'\\'start','middle':'mid\\tdle','last':'end\\\"'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with Windows-style paths (multiple backslashes)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'path':'C:\\\\\\\\Users\\\\\\\\Name\\\\\\\\file.npy'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'path':'C:\\\\\\\\Users\\\\\\\\Name\\\\\\\\file.npy'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with Unix-style paths (forward slashes, no escaping needed)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'path':'/home/user/file.npy'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'path':'/home/user/file.npy'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with mixed content including escape sequences
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'mixed':'normal text\\'quoted\\nnewline\\ttab\\\\backslash'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'mixed':'normal text\\\'quoted\\nnewline\\ttab\\backslash'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
@@ -375,34 +405,45 @@ TEST(NumpyLoaderComprehensiveTest, EscapeSequenceEdgeCases) {
   HeaderData target;
 
   // Test with empty string containing only escape sequences
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'empty':'\\'\\\"'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'empty':'\\\"'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escape sequences at the very beginning and end
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'boundary':'\\'content\\\"'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'boundary':'\\'content\\\"'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with multiple consecutive escape sequences
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'consecutive':'\\\\\\'\\\"\\t\\n'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'consecutive':'\\\'\\\"\\t\\n'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with escape sequences in boolean values (should fail)
-  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4','fortran_order':'Fals\\e','shape':(2,3)}"), std::runtime_error);
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':'Fals\\e','shape':(2,3)})"), std::runtime_error);
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':'Fals\\e','shape':(2,3)})"), std::runtime_error);
 
   // Test with escape sequences in numeric values (should fail)
-  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2\\,3)}"), std::runtime_error);
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':'Invalid','shape':(2,3)})"), std::runtime_error);
+  EXPECT_THROW(ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':'Invalid','shape':(2,3)})"), std::runtime_error);
 }
 
 // Test specific escape sequence cases from numpy.cc lines 91-93 and 97-109
-// Note: Since ParseStringValue is only called for the descr field and additional fields are not processed,
-// we cannot directly test escape sequences in header parsing. The escape sequence handling code
-// is only exercised when parsing the descr field, which must be a valid numpy type.
+// Note: Since ParseStringValue is only called for the descr field
+// and additional fields are not processed,
+// we cannot directly test escape sequences in header parsing.
+// The escape sequence handling code is only exercised when parsing the descr field,
+// which must be a valid numpy type.
 TEST(NumpyLoaderComprehensiveTest, SpecificEscapeSequenceCases) {
   HeaderData target;
 
@@ -432,32 +473,7 @@ TEST(NumpyLoaderComprehensiveTest, SpecificEscapeSequenceCases) {
   EXPECT_EQ(target.shape, TensorShape<>(2, 2));
 }
 
-// Test escape sequence handling by creating a custom test that directly exercises ParseStringValue
-// This test demonstrates how the escape sequence code would be covered if ParseStringValue were accessible
 TEST(NumpyLoaderComprehensiveTest, EscapeSequenceCodeCoverage) {
-  // This test documents the escape sequence handling code that would be covered:
-  //
-  // Lines 91-93: case '\\': out += '\\'; break;
-  // - This handles escaped backslashes like '\\\\' -> '\\'
-  //
-  // Lines 94-96: case '\'': out += '\''; break;
-  // - This handles escaped single quotes like '\\\'' -> '\''
-  //
-  // Lines 97-99: case '\t': out += '\t'; break;
-  // - This handles escaped tabs like '\\t' -> tab character
-  //
-  // Lines 100-102: case '\n': out += '\n'; break;
-  // - This handles escaped newlines like '\\n' -> newline character
-  //
-  // Lines 103-105: case '\"': out += '\"'; break;
-  // - This handles escaped double quotes like '\\\"' -> '"'
-  //
-  // Lines 106-109: default: out += '\\'; out += *input; break;
-  // - This handles unknown escape sequences like '\\x' -> '\\x'
-
-  // Since ParseStringValue is not exposed in the public API, we cannot directly test these cases.
-  // However, the code is exercised when ParseStringValue processes the descr field in valid numpy headers.
-
   HeaderData target;
 
   // Test that the basic string parsing works correctly
@@ -465,15 +481,14 @@ TEST(NumpyLoaderComprehensiveTest, EscapeSequenceCodeCoverage) {
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
-
-  // The escape sequence handling code in ParseStringValue is exercised during this call,
-  // even though we cannot directly test escape sequences due to the numpy type constraints.
 }
 
 // Test comprehensive escape sequence combinations
-// Note: Since ParseStringValue is only called for the descr field and must contain valid numpy types,
-// we cannot directly test escape sequences in the header parsing. The escape sequence handling code
-// is exercised when ParseStringValue processes the descr field, but the descr field must be a valid type.
+// Note: Since ParseStringValue is only called for the descr field
+// and must contain valid numpy types,
+// we cannot directly test escape sequences in the header parsing.
+// The escape sequence handling code is exercised when ParseStringValue
+// processes the descr field, but the descr field must be a valid type.
 TEST(NumpyLoaderComprehensiveTest, ComprehensiveEscapeCombinations) {
   HeaderData target;
 
@@ -503,9 +518,11 @@ TEST(NumpyLoaderComprehensiveTest, ComprehensiveEscapeCombinations) {
 }
 
 // Test boundary conditions for escape sequence parsing
-// Note: Since ParseStringValue is only called for the descr field and must contain valid numpy types,
-// we cannot directly test escape sequences in the header parsing. The escape sequence handling code
-// is exercised when ParseStringValue processes the descr field, but the descr field must be a valid type.
+// Note: Since ParseStringValue is only called for the descr field
+// and must contain valid numpy types,
+// we cannot directly test escape sequences in the header parsing.
+// The escape sequence handling code is exercised when ParseStringValue
+// processes the descr field, but the descr field must be a valid type.
 TEST(NumpyLoaderComprehensiveTest, EscapeSequenceBoundaryConditions) {
   HeaderData target;
 
@@ -545,25 +562,29 @@ TEST(NumpyLoaderComprehensiveTest, EscapeSequenceErrorConditions) {
   HeaderData target;
 
   // Test with backslash at end of string (should be treated as literal)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'endslash':'content\\'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'endslash':'content\'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with backslash followed by null terminator (should be treated as literal)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'null':'content\\'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'null':'content\'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with backslash followed by end of string (should be treated as literal)
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'eos':'content\\'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'eos':'content\'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
 
   // Test with backslash followed by various control characters
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),'control':'\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\x09\\x0A\\x0B\\x0C\\x0D\\x0E\\x0F'}");
+  ParseHeaderContents(target,
+     R"({'descr':'<f4','fortran_order':False,'shape':(2,3),'control':'\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\x09\\x0A\\x0B\\x0C\\x0D\\x0E\\x0F'})");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
@@ -580,8 +601,10 @@ TEST(NumpyLoaderComprehensiveTest, FromFortranOrder) {
   Tensor<CPUBackend> output_2d;
   output_2d.Resize({3, 2}, DALI_FLOAT);
 
-  SampleView<CPUBackend> input_view_2d(input_2d.raw_mutable_data(), input_2d.shape(), input_2d.type());
-  SampleView<CPUBackend> output_view_2d(output_2d.raw_mutable_data(), output_2d.shape(), output_2d.type());
+  SampleView<CPUBackend> input_view_2d(input_2d.raw_mutable_data(),
+    input_2d.shape(), input_2d.type());
+  SampleView<CPUBackend> output_view_2d(output_2d.raw_mutable_data(),
+    output_2d.shape(), output_2d.type());
 
   EXPECT_NO_THROW(FromFortranOrder(output_view_2d, input_view_2d));
 
@@ -607,8 +630,10 @@ TEST(NumpyLoaderComprehensiveTest, FromFortranOrderTypes) {
   Tensor<CPUBackend> output_int;
   output_int.Resize({2, 2}, DALI_INT32);
 
-  SampleView<CPUBackend> input_view_int(input_int.raw_mutable_data(), input_int.shape(), input_int.type());
-  SampleView<CPUBackend> output_view_int(output_int.raw_mutable_data(), output_int.shape(), output_int.type());
+  SampleView<CPUBackend> input_view_int(input_int.raw_mutable_data(),
+    input_int.shape(), input_int.type());
+  SampleView<CPUBackend> output_view_int(output_int.raw_mutable_data(),
+    output_int.shape(), output_int.type());
 
   EXPECT_NO_THROW(FromFortranOrder(output_view_int, input_view_int));
 
@@ -629,8 +654,10 @@ TEST(NumpyLoaderComprehensiveTest, FromFortranOrder1D) {
   Tensor<CPUBackend> output_1d;
   output_1d.Resize({4}, DALI_FLOAT);
 
-  SampleView<CPUBackend> input_view_1d(input_1d.raw_mutable_data(), input_1d.shape(), input_1d.type());
-  SampleView<CPUBackend> output_view_1d(output_1d.raw_mutable_data(), output_1d.shape(), output_1d.type());
+  SampleView<CPUBackend> input_view_1d(input_1d.raw_mutable_data(),
+    input_1d.shape(), input_1d.type());
+  SampleView<CPUBackend> output_view_1d(output_1d.raw_mutable_data(),
+    output_1d.shape(), output_1d.type());
 
   EXPECT_NO_THROW(FromFortranOrder(output_view_1d, input_view_1d));
 
@@ -659,7 +686,7 @@ TEST(NumpyLoaderComprehensiveTest, ReadTensorFortranOrder) {
   auto mock_stream = std::make_unique<MockInputStream>(numpy_file);
 
   Tensor<CPUBackend> result = ReadTensor(mock_stream.get(), false);
-  EXPECT_EQ(result.shape(), TensorShape<>(3, 2)); // Transposed
+  EXPECT_EQ(result.shape(), TensorShape<>(3, 2));  // Transposed
   EXPECT_EQ(result.type(), DALI_FLOAT);
 }
 
@@ -708,40 +735,35 @@ TEST(NumpyLoaderComprehensiveTest, HeaderDataMethods) {
   header.fortran_order = false;
 
   EXPECT_EQ(header.type(), DALI_FLOAT);
-  EXPECT_EQ(header.size(), 24); // 2 * 3 * 4
-  EXPECT_EQ(header.nbytes(), 96); // 24 * 4 (float32 size)
+  EXPECT_EQ(header.size(), 24);  // 2 * 3 * 4
+  EXPECT_EQ(header.nbytes(), 96);  // 24 * 4 (float32 size)
 
   // Test with empty shape
   HeaderData empty_header;
   empty_header.type_info = &TypeTable::GetTypeInfo(DALI_INT32);
   empty_header.shape = {};
-  EXPECT_EQ(empty_header.size(), 1); // Empty shape has size 1
-  EXPECT_EQ(empty_header.nbytes(), 4); // 1 * 4 (int32 size)
+  EXPECT_EQ(empty_header.size(), 1);  // Empty shape has size 1
+  EXPECT_EQ(empty_header.nbytes(), 4);  // 1 * 4 (int32 size)
 }
 
 // Test ParseHeader integration
 TEST(NumpyLoaderComprehensiveTest, ParseHeader) {
   // Test ParseHeaderContents directly (like the existing tests)
   HeaderData target;
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3),}");
+  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':False,'shape':(2,3)}");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, false);
   EXPECT_EQ(target.shape, TensorShape<>(2, 3));
-
-  // Note: Full file parsing tests are complex due to numpy format requirements.
-  // The core functionality is tested via ParseHeaderContents above.
-  // File format tests would require proper numpy file generation which is
-  // beyond the scope of this test suite.
 }
 
 // Test ParseHeader with fortran order
 TEST(NumpyLoaderComprehensiveTest, ParseHeaderFortranOrder) {
   // Test ParseHeaderContents directly (like the existing tests)
   HeaderData target;
-  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':True,'shape':(2,3),}");
+  ParseHeaderContents(target, "{'descr':'<f4','fortran_order':True,'shape':(2,3)}");
   EXPECT_EQ(target.type(), DALI_FLOAT);
   EXPECT_EQ(target.fortran_order, true);
-  EXPECT_EQ(target.shape, TensorShape<>(3, 2)); // Reversed for fortran order
+  EXPECT_EQ(target.shape, TensorShape<>(3, 2));  // Reversed for fortran order
 
   // Note: Full file parsing tests are complex due to numpy format requirements.
   // The core functionality is tested via ParseHeaderContents above.
@@ -774,7 +796,8 @@ TEST(NumpyLoaderComprehensiveTest, ParseODirectHeaderErrors) {
     HeaderData parsed_header;
     size_t alignment = ODirectFileStream::GetAlignment();
     size_t len_alignment = ODirectFileStream::GetLenAlignment();
-    EXPECT_THROW(ParseODirectHeader(parsed_header, odirect_file.get(), alignment, len_alignment), std::runtime_error);
+    EXPECT_THROW(ParseODirectHeader(parsed_header, odirect_file.get(),
+      alignment, len_alignment), std::runtime_error);
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
@@ -792,7 +815,8 @@ TEST(NumpyLoaderComprehensiveTest, ParseODirectHeaderErrors) {
     HeaderData parsed_header;
     size_t alignment = ODirectFileStream::GetAlignment();
     size_t len_alignment = ODirectFileStream::GetLenAlignment();
-    EXPECT_THROW(ParseODirectHeader(parsed_header, odirect_file.get(), alignment, len_alignment), std::runtime_error);
+    EXPECT_THROW(ParseODirectHeader(parsed_header, odirect_file.get(),
+      alignment, len_alignment), std::runtime_error);
   } catch (const std::exception& e) {
     GTEST_SKIP() << "O_DIRECT not supported on this system: " << e.what();
   }
@@ -802,11 +826,8 @@ TEST(NumpyLoaderComprehensiveTest, ParseODirectHeaderErrors) {
 
 // Test ParseODirectHeader memory reallocation (covers lines 231-233)
 TEST(NumpyLoaderComprehensiveTest, ParseODirectHeaderMemoryReallocation) {
-  // Create a numpy file with a large header that will trigger memory reallocation
-  // The header needs to be large enough so that aligned_token_header_len > token_read_len
-
   // Create a header with many fields to make it large
-  std::string large_header = "{'descr':'<f4','fortran_order':False,'shape':(2,3),";
+  std::string large_header = "{'descr':'<f4','fortran_order':False,'shape':(2,3),}";
   for (int i = 0; i < 100; i++) {
     large_header += "'field" + std::to_string(i) + "':'value" + std::to_string(i) + "',";
   }
@@ -829,15 +850,15 @@ TEST(NumpyLoaderComprehensiveTest, ParseODirectHeaderMemoryReallocation) {
   std::string file_data;
   file_data += magic;
   file_data += static_cast<char>(version);
-  file_data += static_cast<char>(0); // minor version
+  file_data += static_cast<char>(0);  // minor version
   file_data += static_cast<char>(header_len & 0xFF);
   file_data += static_cast<char>((header_len >> 8) & 0xFF);
   file_data += large_header;
 
   // Add dummy data - ensure file size is aligned to 4096 for O_DIRECT
-  size_t data_size = 2 * 3 * 4; // 2x3 float32 tensor
+  size_t data_size = 2 * 3 * 4;  // 2x3 float32 tensor
   size_t current_size = file_data.length() + data_size;
-  size_t alignment = 4096; // O_DIRECT alignment
+  size_t alignment = 4096;  // O_DIRECT alignment
   size_t padding_needed = (alignment - (current_size % alignment)) % alignment;
   file_data.resize(file_data.length() + data_size + padding_needed, 0);
 
@@ -858,7 +879,8 @@ TEST(NumpyLoaderComprehensiveTest, ParseODirectHeaderMemoryReallocation) {
 
     // Use small alignment values to ensure token_read_len != aligned_token_header_len
     // This will trigger the memory reallocation code path (lines 231-233)
-    EXPECT_NO_THROW(ParseODirectHeader(parsed_header, odirect_file.get(), o_direct_alignment, o_direct_len_alignment));
+    EXPECT_NO_THROW(ParseODirectHeader(parsed_header,
+      odirect_file.get(), o_direct_alignment, o_direct_len_alignment));
 
     // Verify the header was parsed correctly
     EXPECT_EQ(parsed_header.type(), DALI_FLOAT);
@@ -894,15 +916,15 @@ TEST(NumpyLoaderComprehensiveTest, ParseODirectHeaderAlignmentVariations) {
   std::string file_data;
   file_data += magic;
   file_data += static_cast<char>(version);
-  file_data += static_cast<char>(0); // minor version
+  file_data += static_cast<char>(0);  // minor version
   file_data += static_cast<char>(header_len & 0xFF);
   file_data += static_cast<char>((header_len >> 8) & 0xFF);
   file_data += header;
 
   // Add dummy data - ensure file size is aligned to 4096 for O_DIRECT
-  size_t data_size = 2 * 3 * 4; // 2x3 float32 tensor
+  size_t data_size = 2 * 3 * 4;  // 2x3 float32 tensor
   size_t current_size = file_data.length() + data_size;
-  size_t alignment = 4096; // O_DIRECT alignment
+  size_t alignment = 4096;  // O_DIRECT alignment
   size_t padding_needed = (alignment - (current_size % alignment)) % alignment;
   file_data.resize(file_data.length() + data_size + padding_needed, 0);
 
@@ -923,7 +945,8 @@ TEST(NumpyLoaderComprehensiveTest, ParseODirectHeaderAlignmentVariations) {
 
     // Test with different alignment values to exercise the alignment logic
     // Use the actual O_DIRECT alignment values
-    EXPECT_NO_THROW(ParseODirectHeader(parsed_header, odirect_file.get(), alignment, len_alignment));
+    EXPECT_NO_THROW(ParseODirectHeader(parsed_header, odirect_file.get(),
+      alignment, len_alignment));
     EXPECT_EQ(parsed_header.type(), DALI_FLOAT);
   } catch (const std::exception& e) {
     // If O_DIRECT is not supported on this system, skip the test

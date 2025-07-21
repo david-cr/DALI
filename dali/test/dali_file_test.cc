@@ -3286,7 +3286,7 @@ TEST_F(DaliFileTest, S3FileStreamMockedReadObjectContentsCoverage) {
 
     // Test 1: Test with zero bytes (edge case)
     size_t n = 0;
-    size_t offset = 0;
+    // size_t offset = 0;
 
     // Mock the read_object_contents behavior without calling the actual function
     // This simulates what would happen with a null S3 client
@@ -3295,7 +3295,7 @@ TEST_F(DaliFileTest, S3FileStreamMockedReadObjectContentsCoverage) {
 
     // Test 2: Test with valid read parameters
     n = 200;
-    offset = 100;
+    size_t offset = 100;
 
     // Mock successful read
     bytes_read = n;  // Mock successful read
@@ -3448,7 +3448,7 @@ TEST_F(DaliFileTest, S3FileStreamReadZeroBytes) {
     uint8_t buffer[1024] = {0};
 
     // Mock S3FileStream behavior
-    size_t n = 0;
+    // size_t n = 0;
     size_t pos = 100;  // Current position
 
     // Test Read with zero bytes (should return 0 immediately)
@@ -3459,7 +3459,7 @@ TEST_F(DaliFileTest, S3FileStreamReadZeroBytes) {
     EXPECT_EQ(pos, 100);
 
     // Test with non-zero bytes
-    n = 200;
+    size_t n = 200;
     bytes_read = 200;  // Mock successful read
     pos += bytes_read;  // Position should advance
     EXPECT_EQ(bytes_read, 200);
@@ -3650,7 +3650,7 @@ TEST_F(DaliFileTest, S3FileStreamCompleteIntegration) {
     EXPECT_EQ(current_pos, 100);
 
     // Test Read method
-    size_t n = 200;
+    // size_t n = 200;
     size_t bytes_read = 200;  // Mock successful read
     pos += bytes_read;
     EXPECT_EQ(bytes_read, 200);
@@ -3671,7 +3671,7 @@ TEST_F(DaliFileTest, S3FileStreamCompleteIntegration) {
     EXPECT_EQ(pos, 1948);
 
     // Test Read at end of file
-    n = 100;
+    size_t n = 100;
     bytes_read = 100;  // Mock successful read
     pos += bytes_read;
     EXPECT_EQ(bytes_read, 100);
@@ -3839,7 +3839,7 @@ TEST_F(DaliFileTest, S3FileStreamErrorRecovery) {
 
     // Test recovery from read errors
     uint8_t buffer[100];
-    size_t n = 100;
+    // size_t n = 100;
 
     // Simulate read error and recovery
     try {
@@ -3854,7 +3854,7 @@ TEST_F(DaliFileTest, S3FileStreamErrorRecovery) {
     }
 
     // Test with zero-size reads (should always succeed)
-    n = 0;
+    size_t n = 0;
     size_t bytes_read = 0;
     ptrdiff_t pos_before = pos;
     pos += bytes_read;
