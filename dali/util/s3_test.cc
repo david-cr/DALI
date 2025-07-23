@@ -1374,4 +1374,4 @@ TEST_F(S3FileTest, S3FileStreamRealErrorRecovery) {
     GTEST_SKIP() << "S3FileStream functionality not available: " << e.what();
   }
 }
-}  // namespace dali 
+}  // namespace dali
