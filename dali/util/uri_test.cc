@@ -111,4 +111,391 @@ TEST(URI, Parse_Error3) {
   EXPECT_FALSE(uri.valid());
 }
 
+TEST(URI, Parse_Error4) {
+  auto uri = URI::Parse(
+    "http://example.com/path\a");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\a' character in the path
+}
+
+TEST(URI, Parse_Error5) {
+  auto uri = URI::Parse(
+    "http://example.com?query\a");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\a' character in the query
+}
+
+TEST(URI, Parse_Error6) {
+  auto uri = URI::Parse(
+    "http://example.com#fragment\a");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\a' character in the fragment
+}
+
+TEST(URI, Parse_Error7) {
+  auto uri = URI::Parse(
+    "http://example\a.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\a' character in the authority
+}
+
+TEST(URI, Parse_Error8) {
+  auto uri = URI::Parse(
+    "http\a://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\a' character in the scheme
+}
+
+TEST(URI, Parse_Error9) {
+  auto uri = URI::Parse(
+    "http://example.com/path\b");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\b' character in the path
+}
+
+TEST(URI, Parse_Error10) {
+  auto uri = URI::Parse(
+    "http://example.com?query\b");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\b' character in the query
+}
+
+TEST(URI, Parse_Error11) {
+  auto uri = URI::Parse(
+    "http://example.com#fragment\b");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\b' character in the fragment
+}
+
+TEST(URI, Parse_Error12) {
+  auto uri = URI::Parse(
+    "http://example\b.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\b' character in the authority
+}
+
+TEST(URI, Parse_Error13) {
+  auto uri = URI::Parse(
+    "http\b://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\b' character in the scheme
+}
+
+TEST(URI, Parse_Error14) {
+  auto uri = URI::Parse(
+    "http://example.com/path\t");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\t' character in the path
+}
+
+TEST(URI, Parse_Error15) {
+  auto uri = URI::Parse(
+    "http://example.com?query\t");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\t' character in the query
+}
+
+TEST(URI, Parse_Error16) {
+  auto uri = URI::Parse(
+    "http://example.com#fragment\t");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\t' character in the fragment
+}
+
+TEST(URI, Parse_Error17) {
+  auto uri = URI::Parse(
+    "http://example\t.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\t' character in the authority
+}
+
+TEST(URI, Parse_Error18) {
+  auto uri = URI::Parse(
+    "http\t://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\t' character in the scheme
+}
+
+TEST(URI, Parse_Error19) {
+  auto uri = URI::Parse(
+    "http://example.com/path\n");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\n' character in the path
+}
+
+TEST(URI, Parse_Error20) {
+  auto uri = URI::Parse(
+    "http://example.com?query\n");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\n' character in the query
+}
+
+TEST(URI, Parse_Error21) {
+  auto uri = URI::Parse(
+    "http://example.com#fragment\n");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\n' character in the fragment
+}
+
+TEST(URI, Parse_Error22) {
+  auto uri = URI::Parse(
+    "http://example\n.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\n' character in the authority
+}
+
+TEST(URI, Parse_Error23) {
+  auto uri = URI::Parse(
+    "http\n://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\n' character in the scheme
+}
+
+TEST(URI, Parse_Error24) {
+  auto uri = URI::Parse(
+    "http://example.com/path\v");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\v' character in the path
+}
+
+TEST(URI, Parse_Error25) {
+  auto uri = URI::Parse(
+    "http://example.com/path\f");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\f' character in the path
+}
+
+TEST(URI, Parse_Error26) {
+  auto uri = URI::Parse(
+    "http://example.com/path\r");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\r' character in the path
+}
+
+TEST(URI, Parse_Error27) {
+  auto uri = URI::Parse(
+    "http://example.com?query\v");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\v' character in the query
+}
+
+TEST(URI, Parse_Error28) {
+  auto uri = URI::Parse(
+    "http://example.com#fragment\v");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\v' character in the fragment
+}
+
+TEST(URI, Parse_Error29) {
+  auto uri = URI::Parse(
+    "http://example\v.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\v' character in the authority
+}
+
+TEST(URI, Parse_Error30) {
+  auto uri = URI::Parse(
+    "http\v://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\v' character in the scheme
+}
+
+TEST(URI, Parse_Error31) {
+  auto uri = URI::Parse(
+    "http://example.com?query\f");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\f' character in the query
+}
+
+TEST(URI, Parse_Error32) {
+  auto uri = URI::Parse(
+    "http://example.com#fragment\f");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\f' character in the fragment
+}
+
+TEST(URI, Parse_Error33) {
+  auto uri = URI::Parse(
+    "http://example\f.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\f' character in the authority
+}
+
+TEST(URI, Parse_Error34) {
+  auto uri = URI::Parse(
+    "http\f://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\f' character in the scheme
+}
+
+TEST(URI, Parse_Error35) {
+  auto uri = URI::Parse(
+    "http://example.com?query\r");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\r' character in the query
+}
+
+TEST(URI, Parse_Error36) {
+  auto uri = URI::Parse(
+    "http://example.com#fragment\r");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\r' character in the fragment
+}
+
+TEST(URI, Parse_Error37) {
+  auto uri = URI::Parse(
+    "http://example\r.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\r' character in the authority
+}
+
+TEST(URI, Parse_Error38) {
+  auto uri = URI::Parse(
+    "http\r://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\r' character in the scheme
+}
+
+
+
+TEST(URI, Parse_Error41) {
+  auto uri = URI::Parse(
+    "http");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Expected a colon after the URI scheme" error
+}
+
+TEST(URI, Parse_Error42) {
+  auto uri = URI::Parse(
+    "https");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Expected a colon after the URI scheme" error
+}
+
+TEST(URI, Parse_Error43) {
+  auto uri = URI::Parse(
+    "http@://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (@) in scheme" error
+}
+
+TEST(URI, Parse_Error44) {
+  auto uri = URI::Parse(
+    "http#://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (#) in scheme" error
+}
+
+TEST(URI, Parse_Error45) {
+  auto uri = URI::Parse(
+    "http[://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found ([) in scheme" error
+}
+
+TEST(URI, Parse_Error46) {
+  auto uri = URI::Parse(
+    "http]://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (]) in scheme" error
+}
+
+TEST(URI, Parse_Error47) {
+  auto uri = URI::Parse(
+    "1http://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "First character should be a letter" error
+}
+
+TEST(URI, Parse_Error48) {
+  auto uri = URI::Parse(
+    "9http://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "First character should be a letter" error
+}
+
+TEST(URI, Parse_Error49) {
+  auto uri = URI::Parse(
+    "@http://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "First character should be a letter" error
+}
+
+TEST(URI, Parse_Error50) {
+  auto uri = URI::Parse(
+    "http://example\a.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\a) in authority" error
+}
+
+TEST(URI, Parse_Error51) {
+  auto uri = URI::Parse(
+    "http://example\b.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\b) in authority" error
+}
+
+TEST(URI, Parse_Error52) {
+  auto uri = URI::Parse(
+    "http://example\t.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\t) in authority" error
+}
+
+TEST(URI, Parse_Error53) {
+  auto uri = URI::Parse(
+    "http://example\n.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\n) in authority" error
+}
+
+TEST(URI, Parse_Error54) {
+  auto uri = URI::Parse(
+    "http://example.com/path\a");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\a) in path" error
+}
+
+TEST(URI, Parse_Error55) {
+  auto uri = URI::Parse(
+    "http://example.com/path\b");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\b) in path" error
+}
+
+TEST(URI, Parse_Error56) {
+  auto uri = URI::Parse(
+    "http://example.com/?query\a");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\a) in query" error
+}
+
+TEST(URI, Parse_Error57) {
+  auto uri = URI::Parse(
+    "http://example.com/?query\b");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\b) in query" error
+}
+
+TEST(URI, Parse_Error58) {
+  auto uri = URI::Parse(
+    "http://example.com/#fragment\a");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\a) in fragment" error
+}
+
+TEST(URI, Parse_Error59) {
+  auto uri = URI::Parse(
+    "http://example.com/#fragment\b");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Invalid character found (\b) in fragment" error
+}
+
+TEST(URI, Parse_AllowNonEscaped) {
+  auto uri = URI::Parse(
+    "http://example.com/path with spaces", URI::ParseOpts::AllowNonEscaped);
+  EXPECT_TRUE(uri.valid());
+  // This should allow spaces in path with AllowNonEscaped option
+}
+
 }  // namespace dali
