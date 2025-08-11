@@ -2003,6 +2003,94 @@ TEST(NumpyLoaderComprehensiveTest, ComprehensiveEdgeCases) {
   EXPECT_THROW(ParseHeaderContents(target, "invalid content"), std::runtime_error);
 }
 
+// Test Big Endian file error (uncovered path)
+TEST(NumpyLoaderTest, BigEndianFileError) {
+  HeaderData target;
+  // Test with Big Endian format ('>' instead of '<')
+  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'>f4', 'fortran_order':False, 'shape':(4,)}"),
+               std::runtime_error);
+}
+
+// Test unknown numpy type string error (uncovered path)
+TEST(NumpyLoaderTest, UnknownNumpyTypeStringError) {
+  HeaderData target;
+  // Test with unknown type string
+  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<x9', 'fortran_order':False, 'shape':(4,)}"),
+               std::runtime_error);
+}
+
+// Test ParseStringValue delimiter errors (uncovered paths)
+TEST(NumpyLoaderTest, ParseStringValueDelimiterErrors) {
+  HeaderData target;
+
+  // Test missing opening quote
+  EXPECT_THROW(ParseHeaderContents(target, "{descr:'<f4', 'fortran_order':False, 'shape':(4,)}"),
+               std::runtime_error);
+
+  // Test missing closing quote
+  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4, 'fortran_order':False, 'shape':(4,)}"),
+               std::runtime_error);
+
+  // Test missing field name quotes
+  EXPECT_THROW(ParseHeaderContents(target, "{descr:'<f4', fortran_order:False, 'shape':(4,)}"),
+               std::runtime_error);
+}
+
+// Test file reading validation errors (uncovered paths)
+TEST(NumpyLoaderTest, FileReadingValidationErrors) {
+  // Test with file that's too short (less than 10 bytes)
+  std::string short_file = "\x93NUMPY\x01\x00";
+  MockInputStream short_stream(short_file);
+
+  HeaderData header;
+  EXPECT_THROW(ParseHeader(header, &short_stream), std::runtime_error);
+
+  // Test with file that has wrong magic number
+  std::string wrong_magic = "WRONGMAGIC\x01\x00\x00\x00";
+  MockInputStream wrong_stream(wrong_magic);
+
+  EXPECT_THROW(ParseHeader(header, &wrong_stream), std::runtime_error);
+}
+
+// Test header corruption errors (uncovered paths)
+TEST(NumpyLoaderTest, HeaderCorruptionErrors) {
+  HeaderData target;
+
+  // Test with header missing opening brace
+  EXPECT_THROW(ParseHeaderContents(target, "descr:'<f4', 'fortran_order':False, 'shape':(4,)}"),
+               std::runtime_error);
+
+  // Test with malformed shape (missing opening parenthesis)
+  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4', 'fortran_order':False, 'shape':4,)}"),
+               std::runtime_error);
+
+  // Test with malformed shape (missing closing parenthesis)
+  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4', 'fortran_order':False, 'shape':(4,}"),
+               std::runtime_error);
+}
+
+// Test ParseInteger error cases (uncovered paths)
+TEST(NumpyLoaderTest, ParseIntegerErrorCases) {
+  HeaderData target;
+
+  // Test with non-numeric shape values
+  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4', 'fortran_order':False, 'shape':(a,)}"),
+               std::runtime_error);
+
+  // Test with empty shape values
+  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4', 'fortran_order':False, 'shape':(,)}"),
+               std::runtime_error);
+}
+
+// Test Skip function error cases (uncovered paths)
+TEST(NumpyLoaderTest, SkipFunctionErrorCases) {
+  HeaderData target;
+
+  // Test with completely malformed header that should definitely fail
+  EXPECT_THROW(ParseHeaderContents(target, "{'descr':'<f4', 'fortran_order':False, 'shape':(4,}"),
+               std::runtime_error); // Missing closing parenthesis in shape
+}
+
 }  // namespace numpy
 }  // namespace dali
 

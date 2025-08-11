@@ -372,9 +372,9 @@ TEST(URI, Parse_Error40) {
 
 TEST(URI, Parse_Error60) {
   auto uri = URI::Parse(
-    "a://example.com");
+    "://example.com");
   EXPECT_FALSE(uri.valid());
-  // This should trigger "Empty scheme" error
+  // This should trigger "First character should be a letter" error
 }
 
 TEST(URI, Parse_Error41) {
