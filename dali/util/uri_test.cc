@@ -356,7 +356,26 @@ TEST(URI, Parse_Error38) {
   // This should trigger display_char with '\r' character in the scheme
 }
 
+TEST(URI, Parse_Error39) {
+  auto uri = URI::Parse(
+    "http\?://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\?' character in the scheme
+}
 
+TEST(URI, Parse_Error40) {
+  auto uri = URI::Parse(
+    "http://example\a.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger display_char with '\a' character in the authority
+}
+
+TEST(URI, Parse_Error60) {
+  auto uri = URI::Parse(
+    "a://example.com");
+  EXPECT_FALSE(uri.valid());
+  // This should trigger "Empty scheme" error
+}
 
 TEST(URI, Parse_Error41) {
   auto uri = URI::Parse(
