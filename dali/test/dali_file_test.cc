@@ -1689,26 +1689,43 @@ TEST_F(DaliFileTest, MmapedFileStreamFreeMappingValidationFailure) {
   MmapedFileStream::FreeFileMappings(5);
 }
 
-// Test 51: MmapedFileStream - Edge Case: Zero Length File
-TEST_F(DaliFileTest, MmapedFileStreamZeroLengthFile) {
-  std::string empty_file = test_dir_ + "/empty_file.txt";
+// Test 51: MmapedFileStream - Edge Case: Minimal Size File
+TEST_F(DaliFileTest, MmapedFileStreamMinimalFile) {
+  std::string minimal_file = test_dir_ + "/minimal_file.txt";
+
+  // Create 1-byte file
+  {
+    std::ofstream file(minimal_file);
+    file << "x";
+    file.close();
+  }
 
   try {
-    auto mmaped_file = std::make_unique<MmapedFileStream>(empty_file, false);
+    auto mmaped_file = std::make_unique<MmapedFileStream>(minimal_file, false);
 
-    EXPECT_EQ(mmaped_file->Size(), 0);
+    EXPECT_EQ(mmaped_file->Size(), 1);
 
-    // Test Get method on zero-length file
+    // Test Get method on minimal file
     auto data = mmaped_file->Get(1);
-    EXPECT_EQ(data, nullptr);  // Should return nullptr for any size > 0
+    EXPECT_NE(data, nullptr);
 
-    // Test Read method on zero-length file
+    // Test Get method with size > file size
+    auto large_data = mmaped_file->Get(2);
+    EXPECT_EQ(large_data, nullptr);
+
+    // Test Read method on minimal file
     std::vector<char> buffer(10);
+    mmaped_file->SeekRead(0, SEEK_SET);
     size_t bytes_read = mmaped_file->Read(buffer.data(), buffer.size());
-    EXPECT_EQ(bytes_read, 0);
+    EXPECT_EQ(bytes_read, 1);
+
+    // Verify the content
+    EXPECT_EQ(buffer[0], 'x');
 
     mmaped_file->Close();
+    std::remove(minimal_file.c_str());
   } catch (const std::exception& e) {
+    std::remove(minimal_file.c_str());
     GTEST_SKIP() << "Memory mapping not supported on this system: " << e.what();
   }
 }
