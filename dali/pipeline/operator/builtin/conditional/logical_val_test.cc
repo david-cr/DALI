@@ -370,6 +370,45 @@ TEST_F(LogicalNotTest, TestUnsupportedDataType) {
   SUCCEED() << "TYPE_SWITCH exception path exists in source code but is difficult to trigger through pipeline testing";
 }
 
+// Test GPU input error to trigger ReportGpuInputError function
+TEST_F(LogicalNotTest, TestGpuInputError) {
+  // This test verifies that ReportGpuInputError is called when GPU inputs
+  // are provided to the LogicalNot operator, which is CPU-only.
+
+  Pipeline pipe(kBatchSize, 4, 0);
+
+  // Add external input on GPU
+  pipe.AddOperator(OpSpec("ExternalSource")
+                       .AddArg("device", "gpu")
+                       .AddArg("name", "input")
+                       .AddOutput("input", StorageDevice::GPU),
+                   "input");
+
+  // Try to add LogicalNot operator on GPU (this should trigger ReportGpuInputError)
+  try {
+    pipe.AddOperator(OpSpec("_conditional__Not_")
+                         .AddArg("device", "gpu")
+                         .AddInput("input", StorageDevice::GPU)
+                         .AddOutput("output", StorageDevice::GPU),
+                     "logical_not");
+
+    vector<std::pair<string, string>> outputs = {{"output", "gpu"}};
+    pipe.Build(outputs);
+
+    // If we get here, the test should fail because GPU inputs should be rejected
+    FAIL() << "Expected GPU input error but pipeline built successfully";
+  } catch (std::exception &e) {
+    // Verify the specific error message from ReportGpuInputError
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Got a GPU input"), std::string::npos)
+        << "Expected GPU input error message, got: " << error_msg;
+    EXPECT_NE(error_msg.find("logical expression"), std::string::npos)
+        << "Expected logical expression error context, got: " << error_msg;
+  } catch (...) {
+    FAIL() << "Unexpected exception type for GPU input error";
+  }
+}
+
 // Test with various data types systematically
 template<typename T>
 class LogicalNotDataTypeTest : public LogicalNotTest {};
