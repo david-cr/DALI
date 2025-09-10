@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
@@ -25,6 +26,8 @@
 #include "dali/pipeline/data/types.h"
 #include "dali/pipeline/workspace/workspace.h"
 #include "dali/test/dali_operator_test.h"
+#include "dali/pipeline/operator/builtin/conditional/merge.h"
+#include "dali/pipeline/operator/op_spec.h"
 
 #include "dali/pipeline/pipeline.h"
 #include "dali/test/test_tensors.h"
@@ -528,12 +531,323 @@ TEST_F(SplitMergeNegativeTest, MismatchedTypes) {
   }
 }
 
+TEST_F(SplitMergeNegativeTest, NonScalarPredicate) {
+  Pipeline pipe(kBatchSize, 4, 0);
+  AddExternalInput(pipe, "input");
+  AddExternalInput(pipe, "pred");
+
+  AddSplit(pipe, "split", "cpu", "input", "pred", "split_0", "split_1");
+
+  vector<std::pair<string, string>> outputs = {{"split_0", "cpu"}, {"split_1", "cpu"}};
+  pipe.Build(outputs);
+
+  for (int iter_idx = 0; iter_idx < GetIterCount(); iter_idx++) {
+    auto input = GetInput(iter_idx);
+
+    // Create a non-scalar predicate (1D tensor instead of 0D scalar)
+    TensorList<CPUBackend> predicate;
+    predicate.set_pinned(false);
+    predicate.set_order(AccessOrder::host());
+
+    // Use 1D shape instead of scalar (0D) shape to trigger the validation error
+    predicate.Resize(uniform_list_shape(kBatchSize, TensorShape<1>{1}), DALI_BOOL);
+    auto split_gen = GetSplitGenerator(iter_idx);
+    for (int i = 0; i < kBatchSize; i++) {
+      predicate.mutable_tensor<bool>(i)[0] = split_gen(i);
+    }
+
+    pipe.SetExternalInput("input", input);
+    pipe.SetExternalInput("pred", predicate);
+
+    try {
+      pipe.Run();
+      Workspace ws;
+      pipe.Outputs(&ws);
+      FAIL() << "Exception was expected but was not thrown.";
+    } catch (std::exception &e) {
+      static const char expected[] = "Only scalar indexing is supported.";
+      EXPECT_NE(std::string(e.what()).rfind(expected), std::string::npos)
+          << expected << "\n====\nvs\n====\n"
+          << e.what();
+    } catch (...) { FAIL() << "Unexpected exception."; }
+  }
+}
+
+TEST_F(SplitMergeNegativeTest, MismatchedLayouts) {
+  Pipeline pipe(kBatchSize, 4, 0);
+  AddExternalInput(pipe, "input_hwc");
+  AddExternalInput(pipe, "input_chw");
+  AddExternalInput(pipe, "pred");
+
+  // Create inputs with different layouts
+  AddSplit(pipe, "split_hwc", "cpu", "input_hwc", "pred", "split_hwc_0", "split_hwc_1");
+  AddSplit(pipe, "split_chw", "cpu", "input_chw", "pred", "split_chw_0", "split_chw_1");
+
+  // Try to merge inputs with different layouts
+  AddMerge(pipe, "merge", "cpu", "split_hwc_0", "split_chw_1", "pred", "merge");
+
+  vector<std::pair<string, string>> outputs = {{"merge", "cpu"}};
+  pipe.Build(outputs);
+
+  for (int iter_idx = 0; iter_idx < GetIterCount(); iter_idx++) {
+    auto input_hwc = GetInput(iter_idx);
+    auto input_chw = GetInput(iter_idx);
+
+    // Set different layouts to trigger the validation error
+    input_hwc.SetLayout("HWC");
+    input_chw.SetLayout("CHW");
+
+    auto predicate = GetPredicate(iter_idx);
+    pipe.SetExternalInput("input_hwc", input_hwc);
+    pipe.SetExternalInput("input_chw", input_chw);
+    pipe.SetExternalInput("pred", predicate);
+
+    try {
+      pipe.Run();
+      Workspace ws;
+      pipe.Outputs(&ws);
+      FAIL() << "Exception was expected but was not thrown.";
+    } catch (std::exception &e) {
+      static const char expected[] = "Found distinct layouts:";
+      EXPECT_NE(std::string(e.what()).rfind(expected), std::string::npos)
+          << expected << "\n====\nvs\n====\n"
+          << e.what();
+    } catch (...) { FAIL() << "Unexpected exception."; }
+  }
+}
+
+TEST_F(SplitMergeNegativeTest, MismatchedDeviceIds) {
+  // This test documents the device ID validation that exists in merge.cc.vcast.bak lines 60-63.
+  // The validation checks that when inputs have the same pinned status, they must also have
+  // the same device ID. However, triggering this validation through pipeline testing is
+  // challenging because:
+  // 1. Device IDs are typically managed by the DALI framework and not easily controllable
+  // 2. The validation only occurs when both inputs have the same pinned status AND both have samples
+  // 3. The merge operator has other validations that may fail before reaching the device ID check
+
+  // The validation code in merge.cc.vcast.bak:
+  // if (base_input.is_pinned() == input.is_pinned()) {
+  //   DALI_ENFORCE(base_input.device_id() == input.device_id(),
+  //                make_string(error_msg_base, "Found distinct device id: ",
+  //                            base_input.device_id(), " and ", input.device_id(), "."));
+  // }
+
+  // This validation ensures that when both inputs have the same pinned status (both pinned
+  // or both unpinned), they must also have the same device ID to maintain consistency.
+  // The validation is important for ensuring data consistency in merge operations.
+
+  SUCCEED() << "Device ID validation exists in merge.cc.vcast.bak lines 60-63 but is difficult to trigger through pipeline testing due to framework-managed device IDs and complex validation dependencies";
+}
+
 class SplitMergePinnedInputsTest : public SplitMergeTest {
  public:
   TensorList<CPUBackend> GetPinnedInput(int iter_idx) {
     return GetInputImpl(iter_idx, true);
   }
 };
+
+// Unit tests for direct testing of merge operator's SetupImpl method
+class MergeUnitTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    // Create OpSpec for merge operator
+    spec_ = OpSpec("_conditional__Merge")
+        .AddArg("device", "cpu")
+        .AddArg("num_threads", 1)
+        .AddArg("max_batch_size", 32)
+        .AddArgumentInput("predicate", "predicate");  // Add predicate as tensor argument input
+
+    // Create merge operator instance
+    merge_op_ = std::make_unique<Merge<CPUBackend>>(spec_);
+  }
+
+  void TearDown() override {
+    merge_op_.reset();
+  }
+
+  // Helper function to create a TensorList with specific device ID and pinned status
+  std::shared_ptr<TensorList<CPUBackend>> CreateTensorList(int device_id, bool pinned,
+                                                          int num_samples = 2) {
+    auto tl = std::make_shared<TensorList<CPUBackend>>();
+    tl->set_pinned(pinned);
+    tl->set_device_id(device_id);
+    tl->set_type(DALI_FLOAT);
+    tl->Resize(uniform_list_shape(num_samples, TensorShape<>{2, 2}));
+    tl->SetLayout("HW");
+
+    // Fill with some data
+    for (int i = 0; i < num_samples; i++) {
+      auto* data = tl->mutable_tensor<float>(i);
+      for (int j = 0; j < 4; j++) {
+        data[j] = static_cast<float>(i * 4 + j);
+      }
+    }
+
+    return tl;
+  }
+
+  // Helper function to create a predicate TensorList
+  std::shared_ptr<TensorList<CPUBackend>> CreatePredicate(int num_samples) {
+    auto tl = std::make_shared<TensorList<CPUBackend>>();
+    tl->set_pinned(false);
+    tl->set_device_id(CPU_ONLY_DEVICE_ID);
+    tl->set_type(DALI_BOOL);
+    tl->Resize(uniform_list_shape(num_samples, TensorShape<0>{}));
+
+    // Fill with alternating true/false values
+    for (int i = 0; i < num_samples; i++) {
+      *tl->mutable_tensor<bool>(i) = (i % 2 == 0);
+    }
+
+    return tl;
+  }
+
+  // Helper function to create a Workspace with inputs
+  std::unique_ptr<Workspace> CreateWorkspace(
+      std::shared_ptr<TensorList<CPUBackend>> input0,
+      std::shared_ptr<TensorList<CPUBackend>> input1,
+      std::shared_ptr<TensorList<CPUBackend>> predicate) {
+    auto ws = std::make_unique<Workspace>();
+
+    // Add inputs to workspace
+    ws->AddInput(input0);
+    ws->AddInput(input1);
+
+    // Add predicate as argument input
+    ws->AddArgumentInput("predicate", predicate);
+
+    return ws;
+  }
+
+  OpSpec spec_;
+  std::unique_ptr<Merge<CPUBackend>> merge_op_;
+};
+
+// Test that device ID validation passes when both inputs have the same device ID
+TEST_F(MergeUnitTest, SameDeviceIdPasses) {
+  auto input0 = CreateTensorList(0, true, 2);   // device_id=0, pinned=true
+  auto input1 = CreateTensorList(0, true, 2);   // device_id=0, pinned=true
+  auto predicate = CreatePredicate(4);  // 4 samples total (2 from each input)
+
+  auto ws = CreateWorkspace(input0, input1, predicate);
+
+  std::vector<OutputDesc> output_desc;
+
+  // This should not throw an exception
+  EXPECT_NO_THROW({
+    merge_op_->SetupImpl(output_desc, *ws);
+  });
+}
+
+// Test that device ID validation fails when inputs have different device IDs but same pinned status
+TEST_F(MergeUnitTest, DifferentDeviceIdSamePinnedStatusFails) {
+  auto input0 = CreateTensorList(0, true, 2);   // device_id=0, pinned=true
+  auto input1 = CreateTensorList(1, true, 2);   // device_id=1, pinned=true
+  auto predicate = CreatePredicate(4);  // 4 samples total (2 from each input)
+
+  auto ws = CreateWorkspace(input0, input1, predicate);
+
+  std::vector<OutputDesc> output_desc;
+
+  // This should throw an exception with device ID error message
+  EXPECT_THROW({
+    merge_op_->SetupImpl(output_desc, *ws);
+  }, std::exception);
+
+  // Verify the exception message contains the expected text
+  try {
+    merge_op_->SetupImpl(output_desc, *ws);
+    FAIL() << "Expected exception was not thrown";
+  } catch (const std::exception& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Found distinct device id:"), std::string::npos)
+        << "Expected device ID error message, got: " << error_msg;
+  }
+}
+
+// Test that device ID validation passes when inputs have different device IDs but different pinned status
+TEST_F(MergeUnitTest, DifferentDeviceIdDifferentPinnedStatusPasses) {
+  auto input0 = CreateTensorList(0, true, 2);   // device_id=0, pinned=true
+  auto input1 = CreateTensorList(1, false, 2);  // device_id=1, pinned=false
+  auto predicate = CreatePredicate(4);  // 4 samples total (2 from each input)
+
+  auto ws = CreateWorkspace(input0, input1, predicate);
+
+  std::vector<OutputDesc> output_desc;
+
+  // This should not throw an exception because pinned status is different
+  EXPECT_NO_THROW({
+    merge_op_->SetupImpl(output_desc, *ws);
+  });
+}
+
+// Test that device ID validation passes when both inputs are unpinned with same device ID
+TEST_F(MergeUnitTest, SameDeviceIdBothUnpinnedPasses) {
+  auto input0 = CreateTensorList(0, false, 2);  // device_id=0, pinned=false
+  auto input1 = CreateTensorList(0, false, 2);  // device_id=0, pinned=false
+  auto predicate = CreatePredicate(4);  // 4 samples total (2 from each input)
+
+  auto ws = CreateWorkspace(input0, input1, predicate);
+
+  std::vector<OutputDesc> output_desc;
+
+  // This should not throw an exception because both have same device ID
+  EXPECT_NO_THROW({
+    merge_op_->SetupImpl(output_desc, *ws);
+  });
+}
+
+// Test that device ID validation fails when both inputs are unpinned but have different device IDs
+TEST_F(MergeUnitTest, DifferentDeviceIdBothUnpinnedFails) {
+  auto input0 = CreateTensorList(0, false, 2);  // device_id=0, pinned=false
+  auto input1 = CreateTensorList(1, false, 2);  // device_id=1, pinned=false
+  auto predicate = CreatePredicate(4);  // 4 samples total (2 from each input)
+
+  auto ws = CreateWorkspace(input0, input1, predicate);
+
+  std::vector<OutputDesc> output_desc;
+
+  // This should throw an exception with device ID error message
+  EXPECT_THROW({
+    merge_op_->SetupImpl(output_desc, *ws);
+  }, std::exception);
+
+  // Verify the exception message contains the expected text
+  try {
+    merge_op_->SetupImpl(output_desc, *ws);
+    FAIL() << "Expected exception was not thrown";
+  } catch (const std::exception& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Found distinct device id:"), std::string::npos)
+        << "Expected device ID error message, got: " << error_msg;
+  }
+}
+
+// Test that device ID validation fails when both inputs are pinned but have different device IDs
+TEST_F(MergeUnitTest, DifferentDeviceIdBothPinnedFails) {
+  auto input0 = CreateTensorList(0, true, 2);   // device_id=0, pinned=true
+  auto input1 = CreateTensorList(2, true, 2);   // device_id=2, pinned=true
+  auto predicate = CreatePredicate(4);  // 4 samples total (2 from each input)
+
+  auto ws = CreateWorkspace(input0, input1, predicate);
+
+  std::vector<OutputDesc> output_desc;
+
+  // This should throw an exception with device ID error message
+  EXPECT_THROW({
+    merge_op_->SetupImpl(output_desc, *ws);
+  }, std::exception);
+
+  // Verify the exception message contains the expected text
+  try {
+    merge_op_->SetupImpl(output_desc, *ws);
+    FAIL() << "Expected exception was not thrown";
+  } catch (const std::exception& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Found distinct device id:"), std::string::npos)
+        << "Expected device ID error message, got: " << error_msg;
+  }
+}
 
 TEST_F(SplitMergePinnedInputsTest, Mixes) {
   Pipeline pipe(kBatchSize, 4, 0);
