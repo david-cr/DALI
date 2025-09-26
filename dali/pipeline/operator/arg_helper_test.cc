@@ -13,6 +13,9 @@
 // limitations under the License.
 
 #include "dali/pipeline/operator/arg_helper.h"
+#include "dali/pipeline/operator/argument.h"
+#include "dali/pipeline/proto/dali_proto_utils.h"
+#include "dali/pipeline/dali.pb.h"
 #include <gtest/gtest.h>
 #include "dali/pipeline/operator/op_spec.h"
 #include "dali/pipeline/workspace/workspace.h"
@@ -243,6 +246,111 @@ TEST(ArgValue, TensorInput_1D_ExpectedShape_AllowEmpty) {
 
 TEST(ArgValue, TensorInput_3D_ExpectedShape_AllowEmpty) {
   ArgValueTestAllowEmpty<3>(uniform_list_shape(kNumSamples, TensorShape<3>{10, 10, 3}));
+}
+
+// Test that covers the DALI_ENFORCE error path in DeserializeProtobuf (line 69)
+// This test triggers the "Invalid argument \"type\" in protobuf" error
+TEST(ArgumentDeserialization, InvalidArgumentTypeError) {
+  // Create a protobuf argument with an invalid type that's not in the function map
+  dali_proto::Argument proto_arg;
+  proto_arg.set_name("test_arg");
+  proto_arg.set_type("invalid_type");  // This type is not in the function map
+  proto_arg.set_is_vector(false);
+
+  // Wrap in DaliProtoPriv
+  DaliProtoPriv wrapper(&proto_arg);
+
+  // This should trigger the DALI_ENFORCE error on line 69
+  EXPECT_THROW({
+    DeserializeProtobuf(wrapper);
+  }, std::exception);
+
+  try {
+    DeserializeProtobuf(wrapper);
+    FAIL() << "Expected exception for invalid argument type";
+  } catch (const std::exception& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Invalid argument \"type\" in protobuf"), std::string::npos)
+        << "Expected error message about invalid argument type, got: " << error_msg;
+  }
+}
+
+// Test that covers the DALI_ENFORCE error path with an invalid vector type
+TEST(ArgumentDeserialization, InvalidVectorArgumentTypeError) {
+  // Create a protobuf argument with an invalid vector type
+  dali_proto::Argument proto_arg;
+  proto_arg.set_name("test_vec_arg");
+  proto_arg.set_type("unknown_vector_type");  // This type is not in the function map
+  proto_arg.set_is_vector(true);
+
+  // Wrap in DaliProtoPriv
+  DaliProtoPriv wrapper(&proto_arg);
+
+  // This should trigger the DALI_ENFORCE error on line 69
+  EXPECT_THROW({
+    DeserializeProtobuf(wrapper);
+  }, std::exception);
+
+  try {
+    DeserializeProtobuf(wrapper);
+    FAIL() << "Expected exception for invalid vector argument type";
+  } catch (const std::exception& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Invalid argument \"type\" in protobuf"), std::string::npos)
+        << "Expected error message about invalid argument type, got: " << error_msg;
+  }
+}
+
+// Test that covers the DALI_ENFORCE error path with an empty type string
+TEST(ArgumentDeserialization, EmptyArgumentTypeError) {
+  // Create a protobuf argument with an empty type
+  dali_proto::Argument proto_arg;
+  proto_arg.set_name("test_empty_arg");
+  proto_arg.set_type("");  // Empty type string
+  proto_arg.set_is_vector(false);
+
+  // Wrap in DaliProtoPriv
+  DaliProtoPriv wrapper(&proto_arg);
+
+  // This should trigger the DALI_ENFORCE error on line 69
+  EXPECT_THROW({
+    DeserializeProtobuf(wrapper);
+  }, std::exception);
+
+  try {
+    DeserializeProtobuf(wrapper);
+    FAIL() << "Expected exception for empty argument type";
+  } catch (const std::exception& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Invalid argument \"type\" in protobuf"), std::string::npos)
+        << "Expected error message about invalid argument type, got: " << error_msg;
+  }
+}
+
+// Test that covers the DALI_ENFORCE error path with a numeric type not in the map
+TEST(ArgumentDeserialization, UnsupportedNumericTypeError) {
+  // Create a protobuf argument with a numeric type that's not supported
+  dali_proto::Argument proto_arg;
+  proto_arg.set_name("test_double_arg");
+  proto_arg.set_type("double");  // double is not in the function map (only float is)
+  proto_arg.set_is_vector(false);
+
+  // Wrap in DaliProtoPriv
+  DaliProtoPriv wrapper(&proto_arg);
+
+  // This should trigger the DALI_ENFORCE error on line 69
+  EXPECT_THROW({
+    DeserializeProtobuf(wrapper);
+  }, std::exception);
+
+  try {
+    DeserializeProtobuf(wrapper);
+    FAIL() << "Expected exception for unsupported numeric type";
+  } catch (const std::exception& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Invalid argument \"type\" in protobuf"), std::string::npos)
+        << "Expected error message about invalid argument type, got: " << error_msg;
+  }
 }
 
 
