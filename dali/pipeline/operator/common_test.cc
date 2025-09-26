@@ -13,9 +13,11 @@
 // limitations under the License.
 
 #include "dali/pipeline/operator/common.h"  // NOLINT
+#include "dali/pipeline/operator/error_reporting.h"
 #include <gtest/gtest.h>
 #include <memory>
 #include <vector>
+#include <system_error>
 #include "dali/pipeline/operator/op_spec.h"
 
 namespace dali {
@@ -129,6 +131,225 @@ TEST(PipelineCommon, GetShapeLikeArgumentInput) {
   for (int i = 0; i < N; i++) {
     for (int d = 0; d < D; d++)
       EXPECT_EQ(shape[i * D + d], i * 1.1f);
+  }
+}
+
+// Test that covers the DALI_ENFORCE validation in GetOperatorOriginInfo (lines 38-40)
+// These tests verify that mismatched stack trace array sizes trigger the appropriate errors
+TEST(ErrorReporting, GetOperatorOriginInfoMismatchedArraySizes) {
+  // Test case 1: filename and lineno arrays have different sizes
+  {
+    OpSpec spec("PipelineCommonTest");
+    spec.AddArg("_origin_stack_filename", std::vector<std::string>{"file1.py", "file2.py"});
+    spec.AddArg("_origin_stack_lineno", std::vector<int>{10, 20, 30}); // Different size
+
+    EXPECT_THROW({
+      GetOperatorOriginInfo(spec);
+    }, std::exception);
+
+    try {
+      GetOperatorOriginInfo(spec);
+      FAIL() << "Expected exception for mismatched filename and lineno array sizes";
+    } catch (const std::exception& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("origin_stack_filename.size() == origin_stack_lineno.size()"), std::string::npos)
+          << "Expected error message about array size mismatch, got: " << error_msg;
+    }
+  }
+
+  // Test case 2: filename and name arrays have different sizes
+  {
+    OpSpec spec("PipelineCommonTest");
+    spec.AddArg("_origin_stack_filename", std::vector<std::string>{"file1.py"});
+    spec.AddArg("_origin_stack_lineno", std::vector<int>{10});
+    spec.AddArg("_origin_stack_name", std::vector<std::string>{"func1", "func2"}); // Different size
+
+    EXPECT_THROW({
+      GetOperatorOriginInfo(spec);
+    }, std::exception);
+
+    try {
+      GetOperatorOriginInfo(spec);
+      FAIL() << "Expected exception for mismatched filename and name array sizes";
+    } catch (const std::exception& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("origin_stack_filename.size() == origin_stack_name.size()"), std::string::npos)
+          << "Expected error message about array size mismatch, got: " << error_msg;
+    }
+  }
+
+  // Test case 3: filename and line arrays have different sizes
+  {
+    OpSpec spec("PipelineCommonTest");
+    spec.AddArg("_origin_stack_filename", std::vector<std::string>{"file1.py", "file2.py"});
+    spec.AddArg("_origin_stack_lineno", std::vector<int>{10, 20});
+    spec.AddArg("_origin_stack_name", std::vector<std::string>{"func1", "func2"});
+    spec.AddArg("_origin_stack_line", std::vector<std::string>{"line1"}); // Different size
+
+    EXPECT_THROW({
+      GetOperatorOriginInfo(spec);
+    }, std::exception);
+
+    try {
+      GetOperatorOriginInfo(spec);
+      FAIL() << "Expected exception for mismatched filename and line array sizes";
+    } catch (const std::exception& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("origin_stack_filename.size() == origin_stack_line.size()"), std::string::npos)
+          << "Expected error message about array size mismatch, got: " << error_msg;
+    }
+  }
+}
+
+// Test that covers the successful case when all arrays have matching sizes
+TEST(ErrorReporting, GetOperatorOriginInfoMatchingArraySizes) {
+  OpSpec spec("PipelineCommonTest");
+  spec.AddArg("_origin_stack_filename", std::vector<std::string>{"file1.py", "file2.py"});
+  spec.AddArg("_origin_stack_lineno", std::vector<int>{10, 20});
+  spec.AddArg("_origin_stack_name", std::vector<std::string>{"func1", "func2"});
+  spec.AddArg("_origin_stack_line", std::vector<std::string>{"line1", "line2"});
+
+  // This should not throw an exception
+  EXPECT_NO_THROW({
+    auto result = GetOperatorOriginInfo(spec);
+    EXPECT_EQ(result.size(), 2);
+    EXPECT_EQ(result[0].filename, "file1.py");
+    EXPECT_EQ(result[0].lineno, 10);
+    EXPECT_EQ(result[0].name, "func1");
+    EXPECT_EQ(result[0].line, "line1");
+    EXPECT_EQ(result[1].filename, "file2.py");
+    EXPECT_EQ(result[1].lineno, 20);
+    EXPECT_EQ(result[1].name, "func2");
+    EXPECT_EQ(result[1].line, "line2");
+  });
+}
+
+// Test that covers the edge case with empty arrays
+TEST(ErrorReporting, GetOperatorOriginInfoEmptyArrays) {
+  OpSpec spec("PipelineCommonTest");
+  spec.AddArg("_origin_stack_filename", std::vector<std::string>{});
+  spec.AddArg("_origin_stack_lineno", std::vector<int>{});
+  spec.AddArg("_origin_stack_name", std::vector<std::string>{});
+  spec.AddArg("_origin_stack_line", std::vector<std::string>{});
+
+  // Empty arrays should work fine
+  EXPECT_NO_THROW({
+    auto result = GetOperatorOriginInfo(spec);
+    EXPECT_EQ(result.size(), 0);
+  });
+}
+
+// Test that covers the std::system_error exception handling in PropagateError (lines 82-84)
+TEST(ErrorReporting, PropagateErrorSystemError) {
+  // Create an ErrorInfo with system_error exception
+  ErrorInfo error_info;
+  error_info.context_info = "Test context: ";
+  error_info.additional_message = " Additional info";
+
+  // Create a system_error exception
+  std::system_error original_error(std::make_error_code(std::errc::invalid_argument), "Original system error");
+  error_info.exception = std::make_exception_ptr(original_error);
+
+  // Test that PropagateError rethrows system_error with enhanced context
+  EXPECT_THROW({
+    PropagateError(error_info);
+  }, std::system_error);
+
+  try {
+    PropagateError(error_info);
+    FAIL() << "Expected system_error exception";
+  } catch (const std::system_error& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Test context:"), std::string::npos)
+        << "Expected context info in error message, got: " << error_msg;
+    EXPECT_NE(error_msg.find("Original system error"), std::string::npos)
+        << "Expected original error message, got: " << error_msg;
+    EXPECT_NE(error_msg.find("Additional info"), std::string::npos)
+        << "Expected additional message, got: " << error_msg;
+    EXPECT_EQ(e.code(), std::make_error_code(std::errc::invalid_argument))
+        << "Expected error code to be preserved";
+  } catch (...) {
+    FAIL() << "Expected system_error exception, got different exception type";
+  }
+}
+
+// Test that covers the dali::invalid_key exception handling in PropagateError (lines 89-90)
+TEST(ErrorReporting, PropagateErrorInvalidKey) {
+  // Create an ErrorInfo with invalid_key exception
+  ErrorInfo error_info;
+  error_info.context_info = "Key error context: ";
+  error_info.additional_message = " Key not found";
+
+  // Create an invalid_key exception
+  dali::invalid_key original_error("Original key error");
+  error_info.exception = std::make_exception_ptr(original_error);
+
+  // Test that PropagateError rethrows invalid_key with enhanced context
+  EXPECT_THROW({
+    PropagateError(error_info);
+  }, dali::invalid_key);
+
+  try {
+    PropagateError(error_info);
+    FAIL() << "Expected invalid_key exception";
+  } catch (const dali::invalid_key& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Key error context:"), std::string::npos)
+        << "Expected context info in error message, got: " << error_msg;
+    EXPECT_NE(error_msg.find("Original key error"), std::string::npos)
+        << "Expected original error message, got: " << error_msg;
+    EXPECT_NE(error_msg.find("Key not found"), std::string::npos)
+        << "Expected additional message, got: " << error_msg;
+  } catch (...) {
+    FAIL() << "Expected invalid_key exception, got different exception type";
+  }
+}
+
+// Test that covers the system_error with different error codes
+TEST(ErrorReporting, PropagateErrorSystemErrorDifferentCodes) {
+  // Test with permission_denied error code
+  ErrorInfo error_info;
+  error_info.context_info = "Permission error: ";
+  error_info.additional_message = " Access denied";
+
+  std::system_error original_error(std::make_error_code(std::errc::permission_denied), "Permission denied");
+  error_info.exception = std::make_exception_ptr(original_error);
+
+  try {
+    PropagateError(error_info);
+    FAIL() << "Expected system_error exception";
+  } catch (const std::system_error& e) {
+    EXPECT_EQ(e.code(), std::make_error_code(std::errc::permission_denied))
+        << "Expected permission_denied error code to be preserved";
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Permission error:"), std::string::npos)
+        << "Expected context info in error message, got: " << error_msg;
+    EXPECT_NE(error_msg.find("Permission denied"), std::string::npos)
+        << "Expected original error message, got: " << error_msg;
+  }
+}
+
+// Test that covers the invalid_key with different error messages
+TEST(ErrorReporting, PropagateErrorInvalidKeyDifferentMessages) {
+  // Test with different key error message
+  ErrorInfo error_info;
+  error_info.context_info = "Database error: ";
+  error_info.additional_message = " Table not found";
+
+  dali::invalid_key original_error("Database key missing");
+  error_info.exception = std::make_exception_ptr(original_error);
+
+  try {
+    PropagateError(error_info);
+    FAIL() << "Expected invalid_key exception";
+  } catch (const dali::invalid_key& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Database error:"), std::string::npos)
+        << "Expected context info in error message, got: " << error_msg;
+    EXPECT_NE(error_msg.find("Database key missing"), std::string::npos)
+        << "Expected original error message, got: " << error_msg;
+    EXPECT_NE(error_msg.find("Table not found"), std::string::npos)
+        << "Expected additional message, got: " << error_msg;
   }
 }
 
