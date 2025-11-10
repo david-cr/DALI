@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25.2)
 set(PLUGIN_NAME "video")
 project(dali_plugin_${PLUGIN_NAME} LANGUAGES CUDA CXX C)
 
@@ -42,6 +42,7 @@ FetchContent_Declare(
     pynvvideocodec
     URL      ${PYNVVIDEOCODEC_SOURCE_URL}
     URL_HASH SHA256=${PYNVVIDEOCODEC_SOURCE_SHA256}
+    PATCH_COMMAND patch -p1 < ${CMAKE_CURRENT_SOURCE_DIR}/CUDA-13.0.patch
 )
 FetchContent_Populate(pynvvideocodec)
 

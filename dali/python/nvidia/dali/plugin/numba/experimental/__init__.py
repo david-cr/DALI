@@ -19,9 +19,11 @@ from nvidia.dali.data_node import DataNode as _DataNode
 from nvidia.dali import ops
 from nvidia.dali import types as dali_types
 from numba import types as numba_types
-from numba import njit, cfunc, carray, cuda
+from numba import njit, cfunc, carray
+from numba import cuda as nb_cuda
 import numpy as np
 import numba as nb
+import importlib
 
 
 _to_numpy = {
@@ -197,32 +199,50 @@ class NumbaFunction(
             cuda_arguments.append(numba_types.Array(_to_numba[dali_type], ndim, "C"))
 
         if Version(nb.__version__) < Version("0.57.0"):
-            cres = cuda.compiler.compile_cuda(run_fn, numba_types.void, cuda_arguments)
+            cres = nb_cuda.compiler.compile_cuda(run_fn, numba_types.void, cuda_arguments)
         else:
             pipeline = Pipeline.current()
             device_id = pipeline.device_id
-            old_device = nb.cuda.api.get_current_device().id
-            cc = nb.cuda.api.select_device(device_id).compute_capability
-            nb.cuda.api.select_device(old_device)
-            cres = cuda.compiler.compile_cuda(run_fn, numba_types.void, cuda_arguments, cc=cc)
+            old_device = nb_cuda.api.get_current_device().id
+            cc = nb_cuda.api.select_device(device_id).compute_capability
+            nb_cuda.api.select_device(old_device)
+            cres = nb_cuda.compiler.compile_cuda(
+                run_fn,
+                numba_types.void,
+                cuda_arguments,
+                nvvm_options=nvvm_options,
+                fastmath=False,
+                cc=cc,
+            )
 
         tgt_ctx = cres.target_context
         code = run_fn.__code__
         filename = code.co_filename
         linenum = code.co_firstlineno
+        return_value = 0
         if Version(nb.__version__) < Version("0.57.0"):
             nvvm_options["debug"] = False
             nvvm_options["lineinfo"] = False
             lib, _ = tgt_ctx.prepare_cuda_kernel(
                 cres.library, cres.fndesc, True, nvvm_options, filename, linenum
             )
+            return_value = lib.get_cufunc().handle.value
         else:
-            lib, _ = tgt_ctx.prepare_cuda_kernel(
-                cres.library, cres.fndesc, False, True, nvvm_options, filename, linenum
-            )
+            if hasattr(tgt_ctx, "prepare_cuda_kernel"):
+                lib, _ = tgt_ctx.prepare_cuda_kernel(
+                    cres.library, cres.fndesc, False, True, nvvm_options, filename, linenum
+                )
+                return_value = lib.get_cufunc().handle.value
+            else:
+                from numba.cuda.compiler import kernel_fixup
 
-        handle = lib.get_cufunc().handle
-        return handle.value
+                lib = cres.library
+                kernel = lib.get_function(cres.fndesc.llvm_func_name)
+                kernel_fixup(kernel, debug=False)
+                lib._entry_name = cres.fndesc.llvm_func_name
+                return_value = int(lib.get_cufunc().handle)
+
+        return return_value
 
     def _get_run_fn_cpu(self, run_fn, out_types, in_types, outs_ndim, ins_ndim, batch_processing):
         (
@@ -510,7 +530,7 @@ class NumbaFunction(
     @staticmethod
     def _check_minimal_numba_version(throw: bool = True):
         current_version = Version(nb.__version__)
-        toolkit_version = cuda.runtime.get_version()
+        toolkit_version = nb_cuda.runtime.get_version()
         if toolkit_version[0] not in minimal_numba_version:
             if throw:
                 raise RuntimeError(f"Unsupported CUDA toolkit version: {toolkit_version}")
@@ -530,19 +550,45 @@ class NumbaFunction(
 
     @staticmethod
     def _check_cuda_compatibility(throw: bool = True):
-        toolkit_version = cuda.runtime.get_version()
-        driver_version = cuda.driver.driver.get_version()
+        toolkit_version = nb_cuda.runtime.get_version()
+        driver_version = nb_cuda.driver.driver.get_version()
 
-        if toolkit_version > driver_version:
-            if throw:
-                raise RuntimeError(
-                    f"Environment is not compatible with Numba GPU operator. "
-                    f"Driver version is {driver_version} and CUDA Toolkit "
-                    f"version is {toolkit_version}. "
-                    "Driver cannot be older than the CUDA Toolkit"
-                )
-            else:
-                return False
+        # numba_cuda should handle the compatibility between toolkit and driver versions
+        # otherwise check if the driver and runtime matches, or if the last working numba version
+        # matches the driver for CUDA 12
+        try:
+            # try importing cuda.core as it can be used later to check the compatibility
+            # it is okay to fail as it may not be installed, the check later can handle this
+            import cuda.core
+        except ImportError:
+            pass
+
+        # numba_cuda similarly to numba provides numba.cuda module so we need
+        # to check is package is present to learn who provides it
+        numba_cuda_missing = not importlib.util.find_spec("numba_cuda")
+        cuda_core_too_old = (
+            importlib.util.find_spec("core")
+            and importlib.util.find_spec("cuda.core")
+            and Version(cuda.core.__version__) <= Version("0.3.1")
+            and nb_cuda.driver.driver.get_version()[0] > 12
+        )
+        toolkit_newer_than_driver = toolkit_version > driver_version
+        numba_too_old_for_driver = (
+            Version(nb.__version__) <= Version("0.61.2")
+            and nb_cuda.driver.driver.get_version()[0] > 12
+        )
+
+        if numba_cuda_missing or cuda_core_too_old:
+            if toolkit_newer_than_driver or numba_too_old_for_driver:
+                if throw:
+                    raise RuntimeError(
+                        f"Environment is not compatible with Numba GPU operator. "
+                        f"Driver version is {driver_version} and CUDA Toolkit "
+                        f"version is {toolkit_version}. "
+                        "Driver cannot be older than the CUDA Toolkit"
+                    )
+                else:
+                    return False
         return True
 
 

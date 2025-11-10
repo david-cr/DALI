@@ -5,7 +5,7 @@ a build environment
 
 To change build configuration please export appropriate env variables (for exact meaning please check the README):
 PYVER=[default 3.10, required only by Run image]
-CUDA_VERSION=[default 12.8, accepts also 11.0, 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 11.8, 12.0, 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8 and 12.9]
+CUDA_VERSION=[default 13.0, accepts also 12.0, 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8, 12.9 and 13.0]
 NVIDIA_BUILD_ID=[default 12345]
 CREATE_WHL=[default YES]
 CREATE_RUNNER=[default NO]
@@ -40,17 +40,15 @@ shift $((OPTIND - 1))
 export ARCH=${ARCH:-x86_64}
 export PYVER=${PYVER:-3.10}
 export PYV=${PYVER/./}
-export CUDA_VERSION=${CUDA_VERSION:-12.9}
+export CUDA_VERSION=${CUDA_VERSION:-13.0}
 export CUDA_VER=${CUDA_VERSION//./}
 
 if [ "${CUDA_VERSION%%\.*}" ]
 then
-  if [ $CUDA_VER != "110" ] && [ $CUDA_VER != "111" ] && [ $CUDA_VER != "112" ] && [ $CUDA_VER != "113" ] && \
-     [ $CUDA_VER != "114" ] && [ $CUDA_VER != "115" ] && [ $CUDA_VER != "116" ] && [ $CUDA_VER != "117" ] && [ $CUDA_VER != "118" ] && \
-     [ $CUDA_VER != "120" ] && [ $CUDA_VER != "121" ] && [ $CUDA_VER != "122" ] && [ $CUDA_VER != "123" ] && [ $CUDA_VER != "124" ] && \
-     [ $CUDA_VER != "125" ] && [ $CUDA_VER != "126" ] && [ $CUDA_VER != "128" ] && [ $CUDA_VER != "129" ]
+  if [ $CUDA_VER != "120" ] && [ $CUDA_VER != "121" ] && [ $CUDA_VER != "122" ] && [ $CUDA_VER != "123" ] && [ $CUDA_VER != "124" ] && \
+     [ $CUDA_VER != "125" ] && [ $CUDA_VER != "126" ] && [ $CUDA_VER != "128" ] && [ $CUDA_VER != "129" ] && [ $CUDA_VER != "130" ]
   then
-      echo "Wrong CUDA_VERSION=$CUDA_VERSION provided. Only 11.0, 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 11.8, 12.0, 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8 and 12.9 are supported"
+      echo "Wrong CUDA_VERSION=$CUDA_VERSION provided. Only 12.0, 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8, 12.9 and 13.0 are supported"
       exit 1
   fi
 else
@@ -134,11 +132,10 @@ if [[ "$REBUILD_BUILDERS" != "NO" || "$(docker images -q ${BUILDER} 2> /dev/null
 fi
 
 if [[ "$BUILD_TF_PLUGIN" == "YES" && "${PREBUILD_TF_PLUGINS}" == "YES" && ("$REBUILD_BUILDERS" != "NO" || "$(docker images -q ${BUILDER_DALI_TF_BASE_MANYLINUX2010} 2> /dev/null)"  == "") ]]; then
-    echo "Build DALI TF base (manylinux2010)"
-    TF_CUSTOM_OP_IMAGE_MANYLINUX2010="tensorflow/tensorflow:custom-op-gpu-ubuntu16"
+    echo "Build DALI TF base (manylinux)"
+    TF_CUSTOM_OP_IMAGE_MANYLINUX=${CUDA_DEPS_IMAGE}
     docker build -t ${BUILDER_DALI_TF_BASE_MANYLINUX2010} \
-           --build-arg "TF_CUSTOM_OP_IMAGE=${TF_CUSTOM_OP_IMAGE_MANYLINUX2010}" \
-           --build-arg "CUDA_IMAGE=${CUDA_DEPS_IMAGE}" \
+           --build-arg "TF_CUSTOM_OP_IMAGE=${TF_CUSTOM_OP_IMAGE_MANYLINUX}" \
            -f docker/Dockerfile.customopbuilder.clean .
 fi
 
@@ -324,10 +321,10 @@ fi
 if [ "$CREATE_RUNNER" == "YES" ]; then
     echo "Runner image:" ${RUN_IMG}
     echo "You can run this image with DALI installed inside, keep in mind to install neccessary FW package as well"
-    if [ ${CUDA_VER} == "100" ] ; then
-        export CUDA_IMAGE_NAME="nvidia/cuda:10.0-cudnn7-devel-ubuntu18.04"
-    elif [ ${CUDA_VER} == "110" ] ; then
-        export CUDA_IMAGE_NAME="nvidia/cuda:11.0-cudnn8-devel-ubuntu18.04"
+    if [ ${CUDA_VER} == "120" ] ; then
+        export CUDA_IMAGE_NAME="nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04"
+    elif [ ${CUDA_VER} == "130" ] ; then
+        export CUDA_IMAGE_NAME="nvidia/cuda:13.0.0-cudnn-devel-ubuntu24.04"
     else
         echo "**************************************************************"
         echo "Not supported CUDA version"

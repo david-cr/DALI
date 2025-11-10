@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.25.2)
 
 # allow usage of check_symbol_exists() macro
 include(CheckCXXSymbolExists)
@@ -20,7 +20,6 @@ include(CheckCXXCompilerFlag)
 include(CMakeDependentOption)
 
 include(cmake/Utils.cmake)
-include(cmake/CUDA_utils.cmake)
 
 if (POLICY CMP0075)
   cmake_policy(SET CMP0075 NEW)
@@ -34,7 +33,18 @@ project(DALI CUDA CXX C)
 set(DALI_ROOT ${PROJECT_SOURCE_DIR})
 set(CUDA_VERSION "${CMAKE_CUDA_COMPILER_VERSION}")
 
+# more recent CMake puts both cuda/targets/x86_64-linux/include and cuda/targets/x86_64-linux/include/cccl into the path
+# while we usually need only the former
+string(FIND "${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}" ";" SEMICOLON_POS)
+if(NOT "${SEMICOLON_POS}" EQUAL -1)
+    list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 0 CUDA_TOOLKIT_INCLUDE_MAJOR_DIRECTORY)
+else()
+    set(CUDA_TOOLKIT_INCLUDE_MAJOR_DIRECTORY ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+endif()
+
 parse_cuda_version(${CUDA_VERSION} CUDA_VERSION_MAJOR CUDA_VERSION_MINOR CUDA_VERSION_PATCH CUDA_VERSION_SHORT CUDA_VERSION_SHORT_DIGIT_ONLY)
+# CUDA_utils.cmake uses CUDA_VERSION_MAJOR value to determine the content of CUDA_known_archs and CUDA_TARGET_ARCHS
+include(cmake/CUDA_utils.cmake)
 
 check_cxx_compiler_flag(-fopenmp      CXX_HAVE_OMP)
 check_cxx_compiler_flag(-fopenmp-simd CXX_HAVE_OMP_SIMD)
@@ -210,6 +220,7 @@ if (BUILD_PYTHON)
   # Python binary can be used directly, otherwise we just run the python_stub_generator.py
   # and python3 is selected via shebang
   message(STATUS "Generating python stubs using interpreter: ${PYTHON_STUBGEN_INTERPRETER}")
+  set(PYBIND11_FINDPYTHON OFF)
 endif ()
 
 cmake_dependent_option(PREBUILD_DALI_LIBS "Use prebuilt DALI libs to compile python bindings" OFF
@@ -267,7 +278,7 @@ CUDA_find_supported_arch_values(CUDA_supported_archs ${USED_CUDA_COMPILER} ${CUD
 message(STATUS "CUDA supported archs: ${CUDA_supported_archs}")
 
 set(CUDA_TARGET_ARCHS_SORTED ${CUDA_TARGET_ARCHS})
-list(SORT CUDA_TARGET_ARCHS_SORTED)
+list(SORT CUDA_TARGET_ARCHS_SORTED COMPARE NATURAL)
 CUDA_find_supported_arch_values(CUDA_targeted_archs ${USED_CUDA_COMPILER} ${CUDA_TARGET_ARCHS_SORTED})
 message(STATUS "CUDA targeted archs: ${CUDA_targeted_archs}")
 if (NOT CUDA_targeted_archs)
@@ -283,12 +294,18 @@ if (DALI_CLANG_ONLY)
   CUDA_get_toolkit_from_compiler(CUDA_TOOLKIT_PATH_VAR)
   message(STATUS "Used CUDA toolkit: ${CUDA_TOOLKIT_PATH_VAR}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unknown-cuda-version --cuda-path=${CUDA_TOOLKIT_PATH_VAR} ${CUDA_gencode_flags_clang}")
+  # in CTK 13 cuda/std/utility has been moved to cccl/cuda/std/utility and clang doesn't know about this (nor CUTLASS yet)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${CUDA_TOOLKIT_PATH_VAR}/include/cccl")
 endif()
 
 CUDA_get_cmake_cuda_archs(CMAKE_CUDA_ARCHITECTURES ${CUDA_targeted_archs})
 message(STATUS "Generated CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --compiler-options \"-fvisibility=hidden -Wno-free-nonheap-object\" --Wno-deprecated-gpu-targets -Xfatbin -compress-all")
+
+if ("${CUDA_VERSION_MAJOR}" GREATER_EQUAL "13")
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --compress-mode=size")
+endif()
 
 # Suppress a few warnings from nvcc:
 # calling a __host__ function(...) from a __host__ __device__ function(...) is not allowed
@@ -366,7 +383,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CUDA_STANDARD 17)
 
 # CXX flags
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-free-nonheap-object -Wno-unused-variable -Wno-unused-function -Wno-strict-overflow -fno-strict-aliasing -fPIC -fvisibility=hidden")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-free-nonheap-object -Wno-unused-variable -Wno-unused-function -Wno-strict-overflow -Wno-maybe-uninitialized -Wno-unknown-warning-option -fno-strict-aliasing -fPIC -fvisibility=hidden")
 
 if (WERROR)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")

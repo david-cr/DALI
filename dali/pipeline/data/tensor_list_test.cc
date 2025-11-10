@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2019-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -733,6 +733,33 @@ typedef ::testing::Types<CPUBackend, GPUBackend> Backends;
 constexpr cudaStream_t cuda_stream = 0;
 
 TYPED_TEST_SUITE(TensorListSuite, Backends);
+
+TYPED_TEST(TensorListSuite, TestReinterpret) {
+  using Backend = TypeParam;
+  DALIDataType types[] = {
+      DALI_UINT8, DALI_INT8, DALI_UINT16, DALI_INT16, DALI_UINT32, DALI_INT32,
+      DALI_UINT64, DALI_INT64, DALI_FLOAT, DALI_FLOAT16, DALI_FLOAT64, DALI_BOOL,
+      DALI_INTERP_TYPE, DALI_DATA_TYPE, DALI_IMAGE_TYPE,
+  };
+  for (auto old_t : types) {
+    auto old_size = TypeTable::GetTypeInfo(old_t).size();
+    for (auto new_t : types) {
+      auto new_size = TypeTable::GetTypeInfo(new_t).size();
+      TensorList<Backend> t;
+      t.Resize(TensorListShape<>{{2, 3, 4}, {5, 6, 1}}, old_t);
+      if (old_size == new_size) {
+        const void *p0 = t.raw_tensor(0);
+        const void *p1 = t.raw_tensor(1);
+        EXPECT_NO_THROW(t.Reinterpret(new_t));
+        EXPECT_EQ(t.type(), new_t);
+        EXPECT_EQ(t.raw_tensor(0), p0);
+        EXPECT_EQ(t.raw_tensor(1), p1);
+      } else {
+        EXPECT_THROW(t.Reinterpret(new_t), std::exception);
+      }
+    }
+  }
+}
 
 TYPED_TEST(TensorListSuite, SetupAndSetSizeNoncontiguous) {
   constexpr bool is_device = std::is_same_v<TypeParam, GPUBackend>;
@@ -1771,6 +1798,41 @@ TYPED_TEST(TensorListSuite, EmptyShareNonContiguous) {
   for (int i = 0; i < shape.num_samples(); i++) {
     ASSERT_EQ(target.raw_tensor(i), nullptr);
     ASSERT_EQ(target.raw_tensor(i), tv.raw_tensor(i));
+  }
+}
+
+TYPED_TEST(TensorListSuite, ZeroCopyBroadcast) {
+  Tensor<TypeParam> t;
+  t.set_pinned(std::is_same_v<TypeParam, CPUBackend>);
+  t.Resize({5, 4, 3}, DALI_FLOAT);
+  t.SetLayout("HWC");
+  t.SetSourceInfo("test");
+  for (int n : { 0, 1, 6, 42 }) {
+    TensorList<TypeParam> tl(t, n);
+    if (n == 0) {
+      EXPECT_EQ(tl.num_samples(), 0);
+      EXPECT_EQ(tl.sample_dim(), 3);
+      EXPECT_EQ(tl.GetLayout(), "HWC");
+      EXPECT_EQ(tl.is_pinned(), t.is_pinned());
+      continue;
+    }
+    if (n == 1)
+      EXPECT_TRUE(tl.IsContiguous());
+    else
+      EXPECT_FALSE(tl.IsContiguous());
+    EXPECT_EQ(tl.GetLayout(), t.GetLayout());
+    EXPECT_EQ(tl.type(), t.type());
+    EXPECT_EQ(tl.shape()[0], t.shape());
+    EXPECT_EQ(tl.is_pinned(), t.is_pinned());
+    EXPECT_EQ(tl.order(), t.order());
+    EXPECT_EQ(tl.num_samples(), n);
+    EXPECT_EQ(tl.nbytes(), t.nbytes() * n);
+    for (int i = 0; i < n; i++) {
+      EXPECT_EQ(tl.raw_tensor(i), t.raw_data());
+      EXPECT_EQ(tl.shape()[i], t.shape());
+      EXPECT_EQ(tl.GetMeta(i).GetLayout(), t.GetMeta().GetLayout());
+      EXPECT_EQ(tl.GetMeta(i).GetSourceInfo(), t.GetMeta().GetSourceInfo());
+    }
   }
 }
 

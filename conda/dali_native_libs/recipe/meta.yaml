@@ -67,14 +67,14 @@ requirements:
     - {{ compiler('c') }}
     - {{ compiler('cxx') }}
     - pkg-config
-    - cmake >=3.18
+    - cmake >=3.25.2
     - make
     - patchelf
     - python-clang
     - git-lfs
   host:
-    - protobuf =5.27.4
-    - libprotobuf-static =5.27.4
+    - protobuf =6.31.1
+    - libprotobuf-static =6.31.1
     - libjpeg-turbo
     - dali-opencv
     - dali-ffmpeg
@@ -89,7 +89,9 @@ requirements:
     - openjpeg
     - cfitsio
     - nvidia-nvimagecodec-cuda{{ environ.get('CUDA_VERSION', '') | replace(".","") }}
-    - nvcomp
+    - libnvcomp
+    # libnvcomp depends on cuda, so make sure it uses the right version for the build
+    - cuda-version {{ environ.get('CUDA_VERSION', '').split('.')[0] }}
     - aws-sdk-cpp
   run:
     - libjpeg-turbo
@@ -105,10 +107,12 @@ requirements:
     # dependency to install the right version on the libabseil (as protobuf depends on
     # libprotobuf-static and a newer version of libprotobuf-static may be available than
     # the protobuf was build with)
-    - libprotobuf =5.27.4
+    - libprotobuf =6.31.1
     - cfitsio
     - nvidia-nvimagecodec-cuda{{ environ.get('CUDA_VERSION', '') | replace(".","") }}
-    - nvcomp
+    - libnvcomp
+    # libnvcomp depends on cuda, so make sure it uses the right version for the build
+    - cuda-version {{ environ.get('CUDA_VERSION', '').split('.')[0] }}
     - aws-sdk-cpp
 about:
   home: https://github.com/NVIDIA/DALI

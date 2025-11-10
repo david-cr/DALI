@@ -35,15 +35,21 @@ from nvidia.dali.backend_impl import *  # noqa: F401, F403
 from . import __cuda_version__
 import warnings
 import sys
+import atexit
+import gc
 
 
 _ExecutorType.__bool__ = lambda self: self.value != 0
 _ExecutorType.__and__ = lambda x, y: _ExecutorType(x.value & y.value)
 _ExecutorType.__or__ = lambda x, y: _ExecutorType(x.value | y.value)
+_ExecutorType.__xor__ = lambda x, y: _ExecutorType(x.value ^ y.value)
+_ExecutorType.__invert__ = lambda x: _ExecutorType(~x.value)
 
 _ExecutorFlags.__bool__ = lambda self: self.value != 0
 _ExecutorFlags.__and__ = lambda x, y: _ExecutorFlags(x.value & y.value)
 _ExecutorFlags.__or__ = lambda x, y: _ExecutorFlags(x.value | y.value)
+_ExecutorFlags.__xor__ = lambda x, y: _ExecutorFlags(x.value ^ y.value)
+_ExecutorFlags.__invert__ = lambda x: _ExecutorFlags(~x.value)
 
 
 def deprecation_warning(what):
@@ -135,3 +141,8 @@ def check_cuda_runtime():
                 "#pip-wheels-installation-linux "
                 "for the reference."
             )
+
+
+@atexit.register
+def _unload_dali():
+    gc.collect()

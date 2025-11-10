@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <chrono>
 #include <cstdlib>
+#include <limits>
 #include <utility>
 #include "dali/pipeline/util/thread_pool.h"
 #if NVML_ENABLED
@@ -26,7 +28,7 @@
 namespace dali {
 
 ThreadPool::ThreadPool(int num_thread, int device_id, bool set_affinity, const char* name)
-    : threads_(num_thread), running_(true), started_(false), outstanding_work_(0) {
+    : threads_(num_thread) {
   DALI_ENFORCE(num_thread > 0, "Thread pool must have non-zero size");
 #if NVML_ENABLED
   // We use NVML only for setting thread affinity
@@ -45,10 +47,11 @@ ThreadPool::ThreadPool(int num_thread, int device_id, bool set_affinity, const c
 ThreadPool::~ThreadPool() {
   WaitForWork(false);
 
-  std::unique_lock<std::mutex> lock(mutex_);
+  std::unique_lock lock(queue_lock_);
   running_ = false;
-  condition_.notify_all();
   lock.unlock();
+  // Each thread will lower the semaphore by at most 1
+  queue_semaphore_.release(threads_.size());
 
   for (auto &thread : threads_) {
     thread.join();
@@ -56,48 +59,58 @@ ThreadPool::~ThreadPool() {
 }
 
 void ThreadPool::AddWork(Work work, int64_t priority, bool start_immediately) {
-  bool started_before = false;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
+  bool started_before = started_;
+  outstanding_work_.fetch_add(1);
+  if (started_before) {
+    std::lock_guard lock(queue_lock_);
     work_queue_.push({priority, std::move(work)});
-    outstanding_work_.fetch_add(1);
-    started_before = started_;
-    started_ |= start_immediately;
+  } else {
+    work_queue_.push({priority, std::move(work)});
+    if (start_immediately) {
+      std::lock_guard lock(queue_lock_);
+      started_ = true;
+    }
   }
   if (started_) {
-    if (!started_before)
-      condition_.notify_all();
+    if (started_before)
+      queue_semaphore_.release();
     else
-      condition_.notify_one();
+      queue_semaphore_.release(work_queue_.size());
   }
 }
 
 // Blocks until all work issued to the thread pool is complete
 void ThreadPool::WaitForWork(bool checkForErrors) {
   if (outstanding_work_.load()) {
-    std::unique_lock<std::mutex> lock(mutex_);
-    completed_.wait(lock, [this] { return this->outstanding_work_ == 0; });
+    std::unique_lock lock(completed_mutex_);
+    completed_.wait(lock, [&, this] {
+      return this->outstanding_work_ == 0;
+    });
   }
   started_ = false;
   if (checkForErrors) {
     // Check for errors
+    std::exception_ptr err;
     for (size_t i = 0; i < threads_.size(); ++i) {
-      if (!tl_errors_[i].empty()) {
+      if (!err && !tl_errors_[i].empty()) {
         // Throw the first error that occurred
-        string error = make_string("Error in thread ", i, ": ", tl_errors_[i].front());
-        tl_errors_[i].pop();
-        throw std::runtime_error(error);
+        err = std::move(tl_errors_[i].front());
       }
+      tl_errors_[i] = {};
     }
+    if (err)
+      std::rethrow_exception(err);
   }
 }
 
 void ThreadPool::RunAll(bool wait) {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    started_ = true;
+  if (!started_) {
+    {
+      std::lock_guard lock(queue_lock_);
+      started_ = true;
+    }
+    queue_semaphore_.release(work_queue_.size());
   }
-  condition_.notify_all();  // other threads will be waken up if needed
   if (wait) {
     WaitForWork();
   }
@@ -138,23 +151,23 @@ void ThreadPool::ThreadMain(int thread_id, int device_id, bool set_affinity,
       nvml::SetCPUAffinity(core);
     }
 #endif
-  } catch (std::exception &e) {
-    tl_errors_[thread_id].push(e.what());
   } catch (...) {
-    tl_errors_[thread_id].push("Caught unknown exception");
+    tl_errors_[thread_id].push(std::current_exception());
   }
 
   while (running_) {
-    // Block on the condition to wait for work
-    std::unique_lock<std::mutex> lock(mutex_);
-    condition_.wait(lock, [this] { return !running_ || (!work_queue_.empty() && started_); });
-    // If we're no longer running, exit the run loop
-    if (!running_) break;
+    // Wait for something to do
+    queue_semaphore_.acquire();
+
+    // This lock guards only the queue, not the condition - that's handled by the semaphore
+    std::unique_lock lock(queue_lock_);
+
+    if (!running_)
+      break;
 
     // Get work from the queue.
     Work work = std::move(work_queue_.top().second);
     work_queue_.pop();
-
     // Unlock the lock
     lock.unlock();
 
@@ -163,14 +176,8 @@ void ThreadPool::ThreadMain(int thread_id, int device_id, bool set_affinity,
     // in the threads and return an error if one occured.
     try {
       work(thread_id);
-    } catch (std::exception &e) {
-      lock.lock();
-      tl_errors_[thread_id].push(e.what());
-      lock.unlock();
     } catch (...) {
-      lock.lock();
-      tl_errors_[thread_id].push("Caught unknown exception");
-      lock.unlock();
+      tl_errors_[thread_id].push(std::current_exception());
     }
 
     // The task is now complete - we can atomically decrement the number of outstanding work.
@@ -183,7 +190,7 @@ void ThreadPool::ThreadMain(int thread_id, int device_id, bool set_affinity,
       //
       // worker                           WaitForWork
       //
-      //                                  lock.lock()
+      //                                  completed_mutex_.lock()
       //                                  return outstanding_work_ == 0  (false!)
       // --outstanding_work == 0 (true)
       // compleded_.notify_all()          NOT WAITING FOR compleded_ YET!!!!!!!!!!!!!
@@ -198,10 +205,10 @@ void ThreadPool::ThreadMain(int thread_id, int device_id, bool set_affinity,
       //
       // worker                           WaitForWork
       //
-      //                                  lock.lock()
+      //                                  completed_mutex_.lock()
       //                                  return outstanding_work_ == 0  (false!)
       // --outstanding_work == 0 (true)
-      // lock.lock(
+      // completed_mutex_.lock()
       //                                  atomically unlock `lock` and wait for `completed_`
       // At this point we know that if
       // anyone was executing WaitForWork
@@ -209,14 +216,14 @@ void ThreadPool::ThreadMain(int thread_id, int device_id, bool set_affinity,
       // condition but rather waiting on
       // the completed_ condvar.
       //
-      // lock.unlock()
+      // completed_mutex_.unlock()
       // compleded_.notify_all()
       //                                  notified - wake up
-      //                                  lock.lock()
+      //                                  completed_mutex_.lock()
       //                                  continue execution
-
-      lock.lock();
-      lock.unlock();
+      {
+        std::lock_guard lock2(completed_mutex_);
+      }
       completed_.notify_all();
     }
   }

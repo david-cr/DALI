@@ -24,11 +24,14 @@
 #include <queue>
 #include <thread>
 #include <vector>
+#include <stdexcept>
 #include <string>
 #include "dali/core/common.h"
 #if NVML_ENABLED
 #include "dali/util/nvml.h"
 #endif
+#include "dali/core/semaphore.h"
+#include "dali/core/spinlock.h"
 
 
 namespace dali {
@@ -87,15 +90,16 @@ class DLL_PUBLIC ThreadPool {
   };
   std::priority_queue<PrioritizedWork, std::vector<PrioritizedWork>, SortByPriority> work_queue_;
 
-  bool running_;
-  bool started_;
-  std::atomic_int outstanding_work_;
-  std::mutex mutex_;
-  std::condition_variable condition_;
+  alignas(64) spinlock queue_lock_;
+  dali::counting_semaphore queue_semaphore_{0};
+  bool running_ = true;
+  bool started_ = false;
+  alignas(64) std::atomic_int outstanding_work_{0};
+  std::mutex completed_mutex_;
   std::condition_variable completed_;
 
-  //  Stored error strings for each thread
-  vector<std::queue<string>> tl_errors_;
+  // Stored errors for each thread
+  vector<std::queue<std::exception_ptr>> tl_errors_;
 #if NVML_ENABLED
   nvml::NvmlInstance nvml_handle_;
 #endif

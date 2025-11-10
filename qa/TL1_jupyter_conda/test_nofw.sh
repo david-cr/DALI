@@ -1,6 +1,6 @@
 #!/bin/bash -e
 # used pip packages
-pip_packages='jupyter numpy matplotlib pillow opencv-python librosa simpleaudio'
+pip_packages='jupyter numpy matplotlib pillow opencv-python-headless librosa simpleaudio'
 target_dir=./docs/examples
 
 # populate epilog and prolog with variants to enable/disable conda
@@ -12,6 +12,7 @@ do_once() {
   # We need cmake to run the custom plugin notebook + ffmpeg, wget for video example, libasound2-dev for audio test
   # install native compilers in conda instead of using system ones so we can link with conda packages
   enable_conda
+  # Pinning cmake to <= 4.0.3 due to strange interactions of later versions with Jupyter
   conda install gcc==9.4 gxx==9.4 alsa-lib wget ffmpeg cmake -y
   mkdir -p idx_files
   disable_conda

@@ -52,6 +52,8 @@ OUTDIR=${6:-/wheelhouse}
 COMPRESSION=${7:-YES} # whether to compress the resulting wheel
 BUNDLE_NVCOMP=${8:-NO}
 
+MAJOR_CUDA_VERSION="$(echo $OUTWHLNAME | grep -oP 'cuda\K[0-9]{2}')"
+
 if [[ "$COMPRESSION" == "NO" ]]; then
     ZIP_FLAG="-0"
 else
@@ -103,11 +105,11 @@ make_wheel_record() {
 DEPS_LIST=(
     "${DEPS_PATH}/lib64/libjpeg.so.62"
     "${DEPS_PATH}/lib/libjpeg.so.62"
-    "${DEPS_PATH}/lib/libavformat.so.61"
-    "${DEPS_PATH}/lib/libavcodec.so.61"
-    "${DEPS_PATH}/lib/libavfilter.so.10"
-    "${DEPS_PATH}/lib/libavutil.so.59"
-    "${DEPS_PATH}/lib/libswscale.so.8"
+    "${DEPS_PATH}/lib/libavformat.so.62"
+    "${DEPS_PATH}/lib/libavcodec.so.62"
+    "${DEPS_PATH}/lib/libavfilter.so.11"
+    "${DEPS_PATH}/lib/libavutil.so.60"
+    "${DEPS_PATH}/lib/libswscale.so.9"
     "${DEPS_PATH}/lib/libtiff.so.6"
     "${DEPS_PATH}/lib/libsndfile.so.1"
     "${DEPS_PATH}/lib/libFLAC.so.14"
@@ -145,7 +147,7 @@ DEPS_LIST=(
 
 if [ "$BUNDLE_NVCOMP" = "YES" ]; then
     DEPS_LIST+=(
-        "${DEPS_PATH}/cuda/lib64/libnvcomp.so.4"
+        "${DEPS_PATH}/cuda/lib64/libnvcomp.so.5"
     )
 fi
 
@@ -248,8 +250,8 @@ echo "Fixed hashed names"
 patch_rpath() {
     local FILE=$1
     UPDIRS=$(dirname $(echo "$FILE" | sed "s|$PKGNAME_PATH||") | sed 's/[^\/][^\/]*/../g')
-    echo "Setting rpath of $FILE to '\$ORIGIN:\$ORIGIN$UPDIRS:\$ORIGIN$UPDIRS/.libs:\$ORIGIN/../cufft/lib:\$ORIGIN/../npp/lib:\$ORIGIN/../nvjpeg/lib:\$ORIGIN/../nvimgcodec:\$ORIGIN/../nvcomp:/usr/local/cuda/lib64'"
-    patchelf --set-rpath "\$ORIGIN:\$ORIGIN$UPDIRS:\$ORIGIN$UPDIRS/.libs:\$ORIGIN/../cufft/lib:\$ORIGIN/../npp/lib:\$ORIGIN/../nvjpeg/lib:\$ORIGIN/../nvimgcodec:\$ORIGIN/../nvcomp:/usr/local/cuda/lib64" $FILE
+    echo "Setting rpath of $FILE to '\$ORIGIN:\$ORIGIN$UPDIRS:\$ORIGIN$UPDIRS/.libs:\$ORIGIN/../cufft/lib:\$ORIGIN/../npp/lib:\$ORIGIN/../nvjpeg/lib:\$ORIGIN/../nvimgcodec:\$ORIGIN/../nvcomp:/usr/local/cuda/lib64:\$ORIGIN/../cu${MAJOR_CUDA_VERSION}/lib'"
+    patchelf --set-rpath "\$ORIGIN:\$ORIGIN$UPDIRS:\$ORIGIN$UPDIRS/.libs:\$ORIGIN/../cufft/lib:\$ORIGIN/../npp/lib:\$ORIGIN/../nvjpeg/lib:\$ORIGIN/../nvimgcodec:\$ORIGIN/../nvcomp:/usr/local/cuda/lib64:\$ORIGIN/../cu${MAJOR_CUDA_VERSION}/lib" $FILE
     patchelf --print-rpath $FILE
 }
 echo "Fixing rpath of main files..."

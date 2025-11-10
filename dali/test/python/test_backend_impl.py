@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2019-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,10 +18,11 @@ import nvidia.dali.types as types
 import warnings
 from numpy.testing import assert_array_equal
 from nvidia.dali import pipeline_def
-from nvidia.dali.backend_impl import TensorCPU, TensorListCPU, TensorListGPU, GetSchema
+from nvidia.dali.backend_impl import TensorCPU, TensorGPU, TensorListCPU, TensorListGPU, GetSchema
 from nvidia.dali.backend_impl import types as types_
 import nvidia.dali as dali
 
+from nose2.tools import params
 from nose_utils import assert_raises, SkipTest
 from test_utils import dali_type_to_np, py_buffer_from_address, get_device_memory_info
 
@@ -44,49 +45,49 @@ def test_preallocation():
 
 def test_create_tensor():
     arr = np.random.rand(3, 5, 6)
-    tensor = TensorCPU(arr, "NHWC")
+    tensor = TensorCPU(arr, "HWC")
     assert_array_equal(arr, np.array(tensor))
 
 
 def test_create_tensor_and_make_it_release_memory():
     arr = np.random.rand(3, 5, 6)
-    tensor = TensorCPU(arr, "NHWC")
+    tensor = TensorCPU(arr, "HWC")
     assert_array_equal(arr, np.array(tensor))
     arr = None
     tensor = None
 
 
 def test_create_tensorlist():
-    arr = np.random.rand(3, 5, 6)
-    tensorlist = TensorListCPU(arr, "NHWC")
+    arr = np.random.rand(3, 5, 6, 3)
+    tensorlist = TensorListCPU(arr, "HWC")
     assert_array_equal(arr, tensorlist.as_array())
 
 
 def test_create_tensorlist_list():
     arr = np.random.rand(3, 5, 6)
-    tensorlist = TensorListCPU([arr], "NHWC")
+    tensorlist = TensorListCPU([arr], "HWC")
     assert_array_equal(arr.reshape(tuple([1]) + arr.shape), tensorlist.as_array())
 
 
 def test_create_tensorlist_as_tensor():
-    arr = np.random.rand(3, 5, 6)
-    tensorlist = TensorListCPU(arr, "NHWC")
+    arr = np.random.rand(3, 5, 6, 3)
+    tensorlist = TensorListCPU(arr, "HWC")
     tensor = tensorlist.as_tensor()
     assert_array_equal(np.array(tensor), tensorlist.as_array())
 
 
 def test_empty_tensor_tensorlist():
     arr = np.array([], dtype=np.float32)
-    tensor = TensorCPU(arr, "NHWC")
-    tensorlist = TensorListCPU(arr, "NHWC")
+    tensor = TensorCPU(arr, "")
+    tensorlist = TensorListCPU(arr, "")
     assert_array_equal(np.array(tensor), tensorlist.as_array())
     assert np.array(tensor).shape == (0,)
     assert tensorlist.as_array().shape == (0,)
 
 
 def test_tensorlist_getitem_cpu():
-    arr = np.random.rand(3, 5, 6)
-    tensorlist = TensorListCPU(arr, "NHWC")
+    arr = np.random.rand(3, 5, 6, 3)
+    tensorlist = TensorListCPU(arr, "HWC")
     list_of_tensors = [x for x in tensorlist]
 
     assert type(tensorlist.at(0)) is np.ndarray
@@ -102,7 +103,7 @@ def test_tensorlist_getitem_cpu():
 
 def test_data_ptr_tensor_cpu():
     arr = np.random.rand(3, 5, 6)
-    tensor = TensorCPU(arr, "NHWC")
+    tensor = TensorCPU(arr, "HWC")
     from_tensor = py_buffer_from_address(
         tensor.data_ptr(), tensor.shape(), types.to_numpy_type(tensor.dtype)
     )
@@ -111,7 +112,7 @@ def test_data_ptr_tensor_cpu():
 
 def test_data_ptr_tensor_list_cpu():
     arr = np.random.rand(3, 5, 6)
-    tensorlist = TensorListCPU(arr, "NHWC")
+    tensorlist = TensorListCPU(arr, "HW")
     tensor = tensorlist.as_tensor()
     from_tensor_list = py_buffer_from_address(
         tensorlist.data_ptr(), tensor.shape(), types.to_numpy_type(tensor.dtype)
@@ -121,7 +122,7 @@ def test_data_ptr_tensor_list_cpu():
 
 def test_array_interface_tensor_cpu():
     arr = np.random.rand(3, 5, 6)
-    tensorlist = TensorListCPU(arr, "NHWC")
+    tensorlist = TensorListCPU(arr, "HW")
     assert tensorlist[0].__array_interface__["data"][0] == tensorlist[0].data_ptr()
     assert not tensorlist[0].__array_interface__["data"][1]
     assert np.array_equal(tensorlist[0].__array_interface__["shape"], tensorlist[0].shape())
@@ -148,7 +149,7 @@ def test_transfer_cpu_gpu():
 
 def check_array_types(t):
     arr = np.array([[-0.39, 1.5], [-1.5, 0.33]], dtype=t)
-    tensor = TensorCPU(arr, "NHWC")
+    tensor = TensorCPU(arr, "HW")
     assert np.allclose(np.array(arr), np.asanyarray(tensor))
 
 
@@ -183,15 +184,6 @@ def layout_compatible(a, b):
     if b is None:
         b = ""
     return a == b
-
-
-# TODO(spanev): figure out which return_value_policy to choose
-# def test_tensorlist_getitem_slice():
-#    arr = np.random.rand(3, 5, 6)
-#    tensorlist = TensorListCPU(arr, "NHWC")
-#    two_first_tensors = tensorlist[0:2]
-#    assert type(two_first_tensors) == tuple
-#    assert type(two_first_tensors[0]) == TensorCPU
 
 
 def test_tensor_cpu_squeeze():
@@ -390,11 +382,31 @@ def test_tensor_dlpack_export():
         raise SkipTest("Test requires Numpy DLPack support.")
 
     arr = np.arange(20)
-    tensor = TensorCPU(arr, "NHWC")
+    tensor = TensorCPU(arr)
 
     arr_from_dlapck = np.from_dlpack(tensor)
 
     assert np.array_equal(arr, arr_from_dlapck)
+
+
+def test_tensor_from_numpy_dlpack():
+    a = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
+    t = TensorCPU(a.__dlpack__())
+    assert tuple(t.shape()) == tuple(a.shape)
+    assert a.ctypes.data == t.data_ptr()
+
+
+@params((TensorCPU,), (TensorGPU,))
+def test_dlpack_reimport(tensor_type):
+    a = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
+    t = TensorCPU(a)
+    if tensor_type is TensorGPU:
+        t = t._as_gpu()
+    t2 = tensor_type(t.__dlpack__())
+
+    assert t.shape() == t2.shape()
+    assert t.data_ptr() == t2.data_ptr()
+    assert t.dtype == t2.dtype
 
 
 def test_schema_is_stateful():
@@ -416,3 +428,94 @@ def test_schema_is_stateful():
     assert not get_schema(fn.tensor_subscript).IsStateful()
     assert not get_schema(fn.slice).IsStateful()
     assert not get_schema(fn.decoders.image).IsStateful()
+
+
+def test_schema_get_input_device():
+    # Slice's input 0 always matches the backend, but the other inputs can be on CPU
+    # even if the operator is on GPU
+    schema = GetSchema("Slice")
+    # if the operator's backend is not known, the MatchBackend input's device is not known
+    assert schema.GetInputDevice(0, None, None) is None
+    assert schema.GetInputDevice(0, "cpu", None) is None
+    assert schema.GetInputDevice(0, "gpu", None) is None
+    assert schema.GetInputDevice(0, "cpu", "cpu") == "cpu"
+    assert schema.GetInputDevice(0, "gpu", "gpu") == "gpu"
+    assert schema.GetInputDevice(0, "cpu", "gpu") == "gpu"
+    assert schema.GetInputDevice(0, "gpu", "cpu") == "cpu"
+    assert schema.GetInputDevice(0, None, "cpu") == "cpu"
+    assert schema.GetInputDevice(0, None, "gpu") == "gpu"
+
+    assert schema.GetInputDevice(1, None, None) is None
+    assert schema.GetInputDevice(1, "cpu", None) == "cpu"
+    assert schema.GetInputDevice(1, "gpu", None) == "gpu"
+    assert schema.GetInputDevice(1, "cpu", "cpu") == "cpu"
+    assert schema.GetInputDevice(1, "gpu", "gpu") == "gpu"
+    # GPU op, CPU input -> no conversion
+    assert schema.GetInputDevice(1, "cpu", "gpu") == "cpu"
+    # CPU op, GPU input -> need to copy back to CPU
+    assert schema.GetInputDevice(1, "gpu", "cpu") == "cpu"
+    assert schema.GetInputDevice(1, None, "cpu") == "cpu"
+    assert schema.GetInputDevice(1, None, "gpu") == "gpu"
+
+    # metadata op
+    schema = GetSchema("Shapes")
+    assert schema.GetInputDevice(0, None, None) is None
+    for input_device in [None, "cpu", "gpu"]:
+        for operator_device in [None, "cpu", "gpu"]:
+            # Metadata operators can take whatever input is given to them, no conversion is
+            # required.
+            # If the input's actual device is not known, the operator's device is used.
+            expected_device = input_device or operator_device
+            dev = schema.GetInputDevice(0, input_device, operator_device)
+            assert dev == expected_device, (
+                f"{dev} != {expected_device}, "
+                f"input_device: {input_device}, "
+                f"operator_device: {operator_device}"
+            )
+
+    # op with input device "Any"
+    schema = GetSchema("Copy")
+    assert schema.GetInputDevice(0, None, None) is None
+    for input_device in [None, "cpu", "gpu"]:
+        for operator_device in [None, "cpu", "gpu"]:
+            # Copy can take any input, no conversion required (it _does_ the conversion).
+            # If the input's actual device is not known, the operator's device is used.
+            expected_device = input_device or operator_device
+            dev = schema.GetInputDevice(0, input_device, operator_device)
+            assert dev == expected_device, (
+                f"{dev} != {expected_device}, "
+                f"input_device: {input_device}, "
+                f"operator_device: {operator_device}"
+            )
+
+
+@params((TensorCPU,), (TensorGPU,))
+def test_reinterpret_tensor(TensorType):
+    t = TensorCPU(np.array([0x3F800000, 0x3FC00000, 0x40000000], np.int32))
+    if TensorType is TensorGPU:
+        t = t._as_gpu()
+    t.reinterpret(types.UINT32)
+    assert t.dtype == types.UINT32
+    assert np.array_equal(np.array(t.as_cpu()), np.uint32([0x3F800000, 0x3FC00000, 0x40000000]))
+    t.reinterpret(types.FLOAT)
+    assert t.dtype == types.FLOAT
+    assert np.array_equal(np.array(t.as_cpu()), np.float32([1.0, 1.5, 2.0]))
+    with assert_raises(Exception, glob="*different*size*"):
+        t.reinterpret(types.UINT16)
+    with assert_raises(Exception, glob="*different*size*"):
+        t.reinterpret(types.FLOAT64)
+
+
+@params((TensorListCPU,), (TensorListGPU,))
+def test_reinterpret_tensor_list(TensorListType):
+    t = TensorListCPU(np.array([[1, 2, 3], [5, 6, 7]], np.int32))
+    if TensorListType is TensorListGPU:
+        t = t._as_gpu()
+    t.reinterpret(types.UINT32)
+    assert t.dtype == types.UINT32
+    t.reinterpret(types.FLOAT)
+    assert t.dtype == types.FLOAT
+    with assert_raises(Exception, glob="*different*size*"):
+        t.reinterpret(types.UINT16)
+    with assert_raises(Exception, glob="*different*size*"):
+        t.reinterpret(types.FLOAT64)

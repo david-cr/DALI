@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import glob
+from pathlib import Path
 import numpy as np
 import nvidia.dali.tensors as tensors
 import nvidia.dali.fn as fn
@@ -329,6 +330,22 @@ def test_experimental_image_decoder_random_crop_cpu():
     _test_image_decoder_args_cpu(fn.experimental.decoders.image_random_crop)
 
 
+def test_numpy_decoder_cpu():
+    with setup_test_numpy_reader_cpu() as tmp_dir:
+        npy_files = Path(tmp_dir).glob("*.npy")
+        file_list = Path(tmp_dir) / "list.txt"
+        with open(file_list, "w", encoding="utf-8") as f:
+            for npy_file in npy_files:
+                f.write(f"{npy_file} 0\n")
+        pipe = Pipeline(batch_size=batch_size, num_threads=4, device_id=None)
+        data, _ = fn.readers.file(file_list=str(file_list))
+        data = fn.decoders.numpy(data)
+        pipe.set_outputs(data)
+        pipe.build()
+        for _ in range(3):
+            pipe.run()
+
+
 def test_coin_flip_cpu():
     check_no_input(fn.random.coin_flip)
 
@@ -396,6 +413,10 @@ def test_grid_mask_cpu():
 
 def test_multi_paste_cpu():
     check_single_input(fn.multi_paste, in_ids=np.array([0, 1]), output_size=test_data_shape)
+
+
+def test_paste_cpu():
+    check_single_input(fn.paste, fill_value=0, ratio=2.0)
 
 
 def test_roi_random_crop_cpu():
@@ -1398,6 +1419,7 @@ tested_methods = [
     "decoders.image_crop",
     "decoders.image_slice",
     "decoders.image_random_crop",
+    "decoders.numpy",
     "experimental.debayer",
     "experimental.decoders.image",
     "experimental.decoders.image_crop",
@@ -1523,6 +1545,7 @@ tested_methods = [
     "expand_dims",
     "coord_transform",
     "grid_mask",
+    "paste",
     "multi_paste",
     "roi_random_crop",
     "segmentation.random_object_bbox",
@@ -1580,7 +1603,6 @@ excluded_methods = [
     "readers.video",  # not supported for CPU
     "readers.video_resize",  # not supported for CPU
     "optical_flow",  # not supported for CPU
-    "paste",  # not supported for CPU
     "experimental.audio_resample",  # Alias of audio_resample (already tested)
     "experimental.equalize",  # not supported for CPU
     "experimental.filter",  # not supported for CPU

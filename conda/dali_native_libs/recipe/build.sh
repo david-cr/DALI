@@ -112,11 +112,11 @@ fname_with_sha256() {
 }
 
 DEPS_LIST=(
-    "$PREFIX/lib/libavformat.so.61"
-    "$PREFIX/lib/libavcodec.so.61"
-    "$PREFIX/lib/libavfilter.so.10"
-    "$PREFIX/lib/libavutil.so.59"
-    "$PREFIX/lib/libswscale.so.8"
+    "$PREFIX/lib/libavformat.so.62"
+    "$PREFIX/lib/libavcodec.so.62"
+    "$PREFIX/lib/libavfilter.so.11"
+    "$PREFIX/lib/libavutil.so.60"
+    "$PREFIX/lib/libswscale.so.9"
     "lib/libcvcuda.so.0"
     "lib/libnvcv_types.so.0"
 )
@@ -125,7 +125,7 @@ DEPS_PATH=/usr/local/
 
 if [ "$BUILD_NVCOMP" = "ON" ] && [ "$WITH_DYNAMIC_NVCOMP" = "ON" ]; then
     DEPS_LIST+=(
-        "${DEPS_PATH}/cuda/lib64/libnvcomp.so.4"
+        "${DEPS_PATH}/cuda/lib64/libnvcomp.so.5"
     )
 fi
 

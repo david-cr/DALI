@@ -7,37 +7,21 @@ ARG BUILDER_EXTRA_DEPS=scratch
 FROM ${BUILDER_EXTRA_DEPS} as extra_deps
 FROM ${FROM_IMAGE_NAME}
 
-ENV PATH=/opt/rh/gcc-toolset-11/root/usr/bin:$PATH
-
 # Install yum Dependencies
 RUN yum install -y wget doxygen graphviz gettext xz openssl autogen zip \
-                   gcc-toolset-11 \
-                   gcc-toolset-11-libasan-devel gcc-toolset-11-liblsan-devel \
-                   gcc-toolset-11-libtsan-devel gcc-toolset-11-libubsan-devel \
-                   perl perl-IPC-Cmd nasm
+                   gcc-toolset-14-libasan-devel gcc-toolset-14-liblsan-devel \
+                   gcc-toolset-14-libtsan-devel gcc-toolset-14-libubsan-devel \
+                   perl perl-IPC-Cmd nasm clang clang-devel && \
+    sed -i "/texture_fetch_functions\.h/d" /usr/lib/clang/19/include/__clang_cuda_runtime_wrapper.h
 
 ENV ACLOCAL_PATH=/usr/share/aclocal/:/usr/local/share/aclocal
 
-RUN CMAKE_VERSION=3.20.1 && CMAKE_ARCH=$(uname -m) && \
+RUN CMAKE_VERSION=3.25.2 && CMAKE_ARCH=$(uname -m) && \
     wget https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}.sh && \
     test -e /bin/sh || ln -s /usr/bin/sh /bin/sh && \
     chmod +x cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}.sh && \
     ./cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}.sh --prefix=/usr/local --skip-license && \
     rm -rf cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}.sh
-
-# Clang, build it before deps as deps changes more frequently
-RUN CLANG_VERSION=20.1.2                                                                           && \
-    cd /tmp                                                                                        && \
-    wget https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-${CLANG_VERSION}.tar.gz    && \
-    tar -xf llvmorg-*.tar.gz                                                                       && \
-    rm -rf llvmorg-*.tar.gz                                                                        && \
-    cd llvm-*                                                                                      && \
-    mkdir build                                                                                    && \
-    cd build                                                                                       && \
-    cmake -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" -DCMAKE_BUILD_TYPE=Release -G "Unix Makefiles" ../llvm && \
-    make -j"$(grep ^processor /proc/cpuinfo | wc -l)" install                                      && \
-    cd /tmp                                                                                        && \
-    rm -rf llvm-*
 
 COPY DALI_DEPS_VERSION /tmp
 

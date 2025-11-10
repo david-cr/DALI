@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2017-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -113,22 +113,29 @@ class Tensor : public Buffer<Backend> {
   inline void Copy(const Tensor<InBackend> &other, AccessOrder order = {}) {
     constexpr bool is_host_to_host = std::is_same<Backend, CPUBackend>::value &&
                                      std::is_same<InBackend, CPUBackend>::value;
+    auto src_order = other.order();
+    auto dst_order = order_;
     if (!order) {
       if (is_host_to_host)
         order = AccessOrder::host();
-      else
-        order = other.order() ? other.order() : order_;
+      else  // use device order, if available; if not, use whichever (dst, src) is set
+        order = dst_order.is_device()
+                ? dst_order
+                : src_order.is_device()
+                  ? src_order
+                  : dst_order ? dst_order : src_order;
     }
     DALI_ENFORCE(!is_host_to_host || !order.is_device(),
                  "Cannot issue a host-to-host copy on a device stream.");
     this->Resize(other.shape(), other.type());
-    order.wait(order_);
+    order.wait(dst_order);  // wait for the destination to avoid overwriting while in use
+    order.wait(other.order());  // wait for the source to avoid reading while not ready
     this->SetLayout(other.GetLayout());
     this->SetSourceInfo(other.GetSourceInfo());
     this->SetSkipSample(other.ShouldSkipSample());
     type_.template Copy<Backend, InBackend>(this->raw_mutable_data(),
         other.raw_data(), this->size(), order.stream());
-    order_.wait(order);
+    dst_order.wait(order);
   }
 
   /**
@@ -159,6 +166,21 @@ class Tensor : public Buffer<Backend> {
     Index new_size = volume(shape);
     resize(new_size, new_type);
     shape_ = shape;
+  }
+
+  /**
+   * @brief Reinterprets the contents of the tensor as having a different type.
+   *
+   * Changes the element type of the tensor. The size of the element must not change.
+   */
+  void Reinterpret(DALIDataType new_type_id) {
+    Reinterpret(TypeTable::GetTypeInfo(new_type_id));
+  }
+
+  void Reinterpret(const TypeInfo &new_type_info) {
+    DALI_ENFORCE(new_type_info.size() == type_.size(),
+      "Cannot reinterpret the tensor as having a different element size.");
+    type_ = new_type_info;
   }
 
   /**

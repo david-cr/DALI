@@ -45,14 +45,17 @@ namespace copy_impl {
  *
  * The copy ordering can be:
  * - explict, as specified in `order`
- * - the one from `src_order`, if set
- * - the one from `dst_order`
+ * - the one from `dst_order`, if set
+ * - the one from `src_order`
  * @return copy_order - order on which we will do the copy
  */
 AccessOrder SyncBefore(AccessOrder dst_order, AccessOrder src_order, AccessOrder order) {
   if (!order)
-    order = src_order ? src_order : dst_order;
-
+    order = dst_order.is_device()
+            ? dst_order
+            : src_order.is_device()
+              ? src_order
+              : dst_order ? dst_order : src_order;
   // The destination buffer must be ready to be overwritten
   order.wait(dst_order);
   // The source buffer must be ready to cosume
@@ -183,6 +186,32 @@ TensorList<Backend>::TensorList(int batch_size) : curr_num_tensors_(0) {
   resize_tensors(batch_size);
 }
 
+template <typename Backend>
+TensorList<Backend>::TensorList(const Tensor<Backend> &sample, int num_samples) {
+  assert(num_samples >= 0);
+  SetContiguity(num_samples <= 1 ? BatchContiguity::Contiguous : BatchContiguity::Noncontiguous);
+  set_sample_dim(sample.shape().sample_dim());
+  resize_tensors(num_samples);
+  order_ = sample.order();
+  type_ = sample.type_info();
+  layout_ = sample.GetLayout();
+  pinned_ = sample.is_pinned();
+  device_ = sample.device_id();
+  shape_ = uniform_list_shape(num_samples, sample.shape());
+  if (num_samples > 1) {  // multiple samples - non-contiguous list, repeating one sample
+    for (int i = 0; i < num_samples; i++) {
+      tensors_[i].ShareData(sample);
+      tensors_[i].set_order(order(), false);
+    }
+    order().wait(sample.order());
+  } else if (num_samples > 0) {  // just one sample
+    contiguous_buffer_.ShareData(sample);
+    contiguous_buffer_.set_order(order(), false);
+    order().wait(sample.order());
+    SetMeta(0, sample.GetMeta());
+    recreate_views();
+  }
+}
 
 template <typename Backend>
 TensorList<Backend>::TensorList(TensorList<Backend> &&other) noexcept {
