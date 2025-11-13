@@ -58,8 +58,7 @@ inline std::ostream &operator<<(std::ostream &os, AVRational r) {
 namespace dali {
 
 namespace {
-#undef av_err2str
-std::string av_err2str(int errnum) {
+std::string av_err2strx(int errnum) {
   char errbuf[AV_ERROR_MAX_STRING_SIZE];
   av_strerror(errnum, errbuf, AV_ERROR_MAX_STRING_SIZE);
   return std::string{errbuf};
@@ -187,7 +186,7 @@ VideoFile& VideoLoader::get_or_open_file(const std::string &filename) {
       av_freep(&avio_ctx->buffer);
       avio_context_free(&avio_ctx);
       DALI_WARN(make_string("Failed to open video file ", filename, " because of ",
-                            av_err2str(ret)));
+                            av_err2strx(ret)));
       open_files_.erase(filename);
       return empty_file;
     }
@@ -398,7 +397,7 @@ void VideoLoader::seek(VideoFile& file, int frame) {
 
     if (ret < 0) {
       LOG_LINE << "Unable to skip to ts " << seek_time
-                << ": " << av_err2str(ret) << std::endl;
+                << ": " << av_err2strx(ret) << std::endl;
     }
     /* Flush the bitstream filter handle when using mpeg4_unpack_bframes filter.
      * When mpeg4_unpack_bframe is used the filter handle stores information
@@ -594,7 +593,7 @@ void VideoLoader::read_file() {
         if (vid_decoder_) {
           vid_decoder_->finish();
         }
-        DALI_FAIL(make_string("BSF send packet failed: ", av_err2str(ret),
+        DALI_FAIL(make_string("BSF send packet failed: ", av_err2strx(ret),
                               " for file: ", req.filename));
       }
       while ((ret = av_bsf_receive_packet(file.bsf_ctx_.get(), &raw_filtered_pkt)) == 0) {
@@ -607,7 +606,7 @@ void VideoLoader::read_file() {
         if (vid_decoder_) {
           vid_decoder_->finish();
         }
-        DALI_FAIL(make_string("BSF receive packet failed: ", av_err2str(ret),
+        DALI_FAIL(make_string("BSF receive packet failed: ", av_err2strx(ret),
                               " for file: ", req.filename));
       }
 #else
@@ -622,7 +621,7 @@ void VideoLoader::read_file() {
             if (vid_decoder_) {
               vid_decoder_->finish();
             }
-            DALI_FAIL(make_string("BSF error: ", av_err2str(ret), " for file: ", req.filename));
+            DALI_FAIL(make_string("BSF error: ", av_err2strx(ret), " for file: ", req.filename));
         }
         if (ret == 0 && fpkt.data != pkt->data) {
           // fpkt is an offset into pkt, copy the smaller portion to the start
@@ -631,7 +630,7 @@ void VideoLoader::read_file() {
             if (vid_decoder_) {
               vid_decoder_->finish();
             }
-            DALI_FAIL(make_string("av_copy_packet error: ", av_err2str(ret),
+            DALI_FAIL(make_string("av_copy_packet error: ", av_err2strx(ret),
                                   " for file: ", req.filename));
           }
           ret = 1;
