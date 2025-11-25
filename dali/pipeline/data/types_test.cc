@@ -155,6 +155,195 @@ TEST(ListTypeNames, ListTypeNames) {
   ASSERT_EQ(str1, expected_str1);
 }
 
+TEST(TypeInfoCopy, HostToHostCopyOnStreamError) {
+  // Test that H2H copy on stream throws an error (lines 94-96)
+  TypeInfo type;
+  type.SetType<float>();
+
+  constexpr int n = 10;
+  std::vector<float> src(n, 42.0f);
+  std::vector<float> dst(n, 0.0f);
+
+  cudaStream_t stream;
+  CUDA_CALL(cudaStreamCreate(&stream));
+
+  // Should throw when trying to do H2H copy with a stream
+  ASSERT_THROW((type.Copy<CPUBackend, CPUBackend>(dst.data(), src.data(), n, stream, false)), std::logic_error);
+
+  CUDA_CALL(cudaStreamDestroy(stream));
+}
+
+TEST(TypeInfoCopy, ScatterGatherCopyMultipleToMultiple) {
+  // Test ScatterGatherCopy path (lines 46-53, 124-125)
+  // This tests Copy with void**, const void**, use_copy_kernel=true
+  TypeInfo type;
+  type.SetType<int32_t>();
+
+  constexpr int n_samples = 5;
+  constexpr int sample_size = 10;
+
+  // Allocate GPU memory for source samples
+  std::vector<const void*> h_srcs(n_samples);
+  std::vector<void*> h_dsts(n_samples);
+  std::vector<Index> sizes(n_samples, sample_size);
+
+  // Create source data on host
+  std::vector<std::vector<int32_t>> src_data(n_samples);
+  for (int i = 0; i < n_samples; i++) {
+    src_data[i].resize(sample_size);
+    for (int j = 0; j < sample_size; j++) {
+      src_data[i][j] = i * 100 + j;
+    }
+  }
+
+  // Allocate GPU memory and copy source data
+  for (int i = 0; i < n_samples; i++) {
+    void* d_src;
+    void* d_dst;
+    CUDA_CALL(cudaMalloc(&d_src, sample_size * sizeof(int32_t)));
+    CUDA_CALL(cudaMalloc(&d_dst, sample_size * sizeof(int32_t)));
+    CUDA_CALL(cudaMemcpy(d_src, src_data[i].data(), sample_size * sizeof(int32_t),
+                         cudaMemcpyHostToDevice));
+    h_srcs[i] = d_src;
+    h_dsts[i] = d_dst;
+  }
+
+  cudaStream_t stream;
+  CUDA_CALL(cudaStreamCreate(&stream));
+
+  // Call Copy with use_copy_kernel=true to trigger ScatterGatherCopy (lines 124-125)
+  type.Copy<GPUBackend, GPUBackend>(h_dsts.data(), h_srcs.data(), sizes.data(), n_samples,
+                                    stream, true);
+
+  CUDA_CALL(cudaStreamSynchronize(stream));
+
+  // Verify results
+  for (int i = 0; i < n_samples; i++) {
+    std::vector<int32_t> result(sample_size);
+    CUDA_CALL(cudaMemcpy(result.data(), h_dsts[i], sample_size * sizeof(int32_t),
+                         cudaMemcpyDeviceToHost));
+    EXPECT_EQ(result, src_data[i]);
+  }
+
+  // Cleanup
+  for (int i = 0; i < n_samples; i++) {
+    CUDA_CALL(cudaFree(const_cast<void*>(h_srcs[i])));
+    CUDA_CALL(cudaFree(h_dsts[i]));
+  }
+  CUDA_CALL(cudaStreamDestroy(stream));
+}
+
+TEST(TypeInfoCopy, ScatterGatherCopySingleToMultiple) {
+  // Test ScatterGatherCopy with single source to multiple destinations
+  TypeInfo type;
+  type.SetType<float>();
+
+  constexpr int n_samples = 4;
+  constexpr int sample_size = 8;
+
+  // Create contiguous source data on GPU
+  std::vector<float> src_data;
+  for (int i = 0; i < n_samples * sample_size; i++) {
+    src_data.push_back(static_cast<float>(i));
+  }
+
+  void* d_src;
+  CUDA_CALL(cudaMalloc(&d_src, n_samples * sample_size * sizeof(float)));
+  CUDA_CALL(cudaMemcpy(d_src, src_data.data(), n_samples * sample_size * sizeof(float),
+                       cudaMemcpyHostToDevice));
+
+  // Allocate GPU memory for destinations
+  std::vector<void*> h_dsts(n_samples);
+  std::vector<Index> sizes(n_samples, sample_size);
+
+  for (int i = 0; i < n_samples; i++) {
+    CUDA_CALL(cudaMalloc(&h_dsts[i], sample_size * sizeof(float)));
+  }
+
+  cudaStream_t stream;
+  CUDA_CALL(cudaStreamCreate(&stream));
+
+  // Call Copy with use_copy_kernel=true
+  type.Copy<GPUBackend, GPUBackend>(h_dsts.data(), d_src, sizes.data(), n_samples,
+                                    stream, true);
+
+  CUDA_CALL(cudaStreamSynchronize(stream));
+
+  // Verify results
+  for (int i = 0; i < n_samples; i++) {
+    std::vector<float> result(sample_size);
+    CUDA_CALL(cudaMemcpy(result.data(), h_dsts[i], sample_size * sizeof(float),
+                         cudaMemcpyDeviceToHost));
+    for (int j = 0; j < sample_size; j++) {
+      EXPECT_EQ(result[j], src_data[i * sample_size + j]);
+    }
+  }
+
+  // Cleanup
+  CUDA_CALL(cudaFree(d_src));
+  for (int i = 0; i < n_samples; i++) {
+    CUDA_CALL(cudaFree(h_dsts[i]));
+  }
+  CUDA_CALL(cudaStreamDestroy(stream));
+}
+
+TEST(TypeInfoCopy, ScatterGatherCopyMultipleToSingle) {
+  // Test ScatterGatherCopy with multiple sources to single destination
+  TypeInfo type;
+  type.SetType<double>();
+
+  constexpr int n_samples = 3;
+  constexpr int sample_size = 6;
+
+  // Create source data
+  std::vector<std::vector<double>> src_data(n_samples);
+  std::vector<const void*> h_srcs(n_samples);
+  std::vector<Index> sizes(n_samples, sample_size);
+
+  for (int i = 0; i < n_samples; i++) {
+    src_data[i].resize(sample_size);
+    for (int j = 0; j < sample_size; j++) {
+      src_data[i][j] = static_cast<double>(i * 10 + j);
+    }
+    void* d_src;
+    CUDA_CALL(cudaMalloc(&d_src, sample_size * sizeof(double)));
+    CUDA_CALL(cudaMemcpy(d_src, src_data[i].data(), sample_size * sizeof(double),
+                         cudaMemcpyHostToDevice));
+    h_srcs[i] = d_src;
+  }
+
+  // Allocate contiguous destination
+  void* d_dst;
+  CUDA_CALL(cudaMalloc(&d_dst, n_samples * sample_size * sizeof(double)));
+
+  cudaStream_t stream;
+  CUDA_CALL(cudaStreamCreate(&stream));
+
+  // Call Copy with use_copy_kernel=true
+  type.Copy<GPUBackend, GPUBackend>(d_dst, h_srcs.data(), sizes.data(), n_samples,
+                                    stream, true);
+
+  CUDA_CALL(cudaStreamSynchronize(stream));
+
+  // Verify results
+  std::vector<double> result(n_samples * sample_size);
+  CUDA_CALL(cudaMemcpy(result.data(), d_dst, n_samples * sample_size * sizeof(double),
+                       cudaMemcpyDeviceToHost));
+
+  for (int i = 0; i < n_samples; i++) {
+    for (int j = 0; j < sample_size; j++) {
+      EXPECT_EQ(result[i * sample_size + j], src_data[i][j]);
+    }
+  }
+
+  // Cleanup
+  for (int i = 0; i < n_samples; i++) {
+    CUDA_CALL(cudaFree(const_cast<void*>(h_srcs[i])));
+  }
+  CUDA_CALL(cudaFree(d_dst));
+  CUDA_CALL(cudaStreamDestroy(stream));
+}
+
 // The following disabled code tests the scenario when we need to grow the type table
 // - for which we need an inordinate number of artifical types. The compilation is extremely
 // slow and setting a breakpoint in types.h becomes a nightmare.
