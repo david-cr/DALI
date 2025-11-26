@@ -22,6 +22,7 @@
 #include "dali/pipeline/executor/pipelined_executor.h"
 #include "dali/pipeline/executor/async_pipelined_executor.h"
 #include "dali/pipeline/executor/async_separated_pipelined_executor.h"
+#include "dali/pipeline/executor/executor_factory.h"
 #include "dali/pipeline/operator/builtin/external_source.h"
 #include "dali/test/dali_test_utils.h"
 #include "dali/test/tensor_test_utils.h"
@@ -561,6 +562,223 @@ TYPED_TEST(ExecutorTest, PipelineCheckpointingMixed) {
       DALIException);
   else
     this->RunCheckpointingTest(prepare_executor_and_graph, epoch_size);
+}
+
+// Tests for executor_factory.cc coverage
+class ExecutorFactoryTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    // Clear environment variables before each test
+    unsetenv("DALI_EXEC2_MAX_THREADS");
+    unsetenv("DALI_EXEC2_NUM_THREADS");
+    unsetenv("DALI_USE_EXEC2");
+  }
+
+  void TearDown() override {
+    // Clean up environment variables after each test
+    unsetenv("DALI_EXEC2_MAX_THREADS");
+    unsetenv("DALI_EXEC2_NUM_THREADS");
+    unsetenv("DALI_USE_EXEC2");
+  }
+};
+
+TEST_F(ExecutorFactoryTest, TestStreamPolicyPerOperator) {
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::StreamPolicyPerOperator;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestStreamPolicySingle) {
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::StreamPolicySingle;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestStreamPolicyPerBackend) {
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::StreamPolicyPerBackend;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestConcurrencyNone) {
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::ConcurrencyNone;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestConcurrencyFull) {
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::ConcurrencyFull;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestConcurrencyBackend) {
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::ConcurrencyBackend;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestExec2MaxThreadsEnvVar) {
+  setenv("DALI_EXEC2_MAX_THREADS", "8", 1);
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestExec2MaxThreadsEnvVarInvalid) {
+  setenv("DALI_EXEC2_MAX_THREADS", "0", 1);
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestExec2NumThreadsEnvVar) {
+  setenv("DALI_EXEC2_NUM_THREADS", "6", 1);
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestExec2NumThreadsEnvVarZero) {
+  setenv("DALI_EXEC2_NUM_THREADS", "0", 1);
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestForceExec2EnvVar) {
+  setenv("DALI_USE_EXEC2", "1", 1);
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  auto executor = GetExecutor(ExecutorType::AsyncPipelined, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestInvalidExecutorType) {
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  // Use an invalid combination of executor type flags
+  ExecutorType invalid_type = static_cast<ExecutorType>(0xFF);
+  EXPECT_THROW(GetExecutor(invalid_type, flags, 4, 2, 0, 1024, qs), DALIException);
+}
+
+TEST_F(ExecutorFactoryTest, TestAllExecutorTypes) {
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+
+  auto simple = GetExecutor(ExecutorType::Simple, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(simple, nullptr);
+
+  auto pipelined = GetExecutor(ExecutorType::Pipelined, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(pipelined, nullptr);
+
+  auto separated = GetExecutor(ExecutorType::SeparatedPipelined, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(separated, nullptr);
+
+  auto async = GetExecutor(ExecutorType::AsyncPipelined, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(async, nullptr);
+
+  auto async_sep = GetExecutor(ExecutorType::AsyncSeparatedPipelined, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(async_sep, nullptr);
+
+  auto dynamic = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(dynamic, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestCombinedFlags) {
+  QueueSizes qs{2, 2};
+
+  // Test combination of stream policy and concurrency
+  ExecutorFlags flags1 = ExecutorFlags::StreamPolicyPerOperator |
+                         ExecutorFlags::ConcurrencyFull;
+  auto executor1 = GetExecutor(ExecutorType::Dynamic, flags1, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor1, nullptr);
+
+  ExecutorFlags flags2 = ExecutorFlags::StreamPolicySingle |
+                         ExecutorFlags::ConcurrencyNone;
+  auto executor2 = GetExecutor(ExecutorType::Dynamic, flags2, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor2, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestExec2MaxThreadsEnvVarNegative) {
+  setenv("DALI_EXEC2_MAX_THREADS", "-1", 1);
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestExec2NumThreadsEnvVarNegative) {
+  setenv("DALI_EXEC2_NUM_THREADS", "-1", 1);
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  auto executor = GetExecutor(ExecutorType::Dynamic, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestForceExec2EnvVarZero) {
+  setenv("DALI_USE_EXEC2", "0", 1);
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  auto executor = GetExecutor(ExecutorType::AsyncPipelined, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestAsyncPipelinedWithoutForceExec2) {
+  // Ensure DALI_USE_EXEC2 is not set to test the else branch
+  unsetenv("DALI_USE_EXEC2");
+  QueueSizes qs{2, 2};
+  ExecutorFlags flags = ExecutorFlags::None;
+  auto executor = GetExecutor(ExecutorType::AsyncPipelined, flags, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestDynamicExecutorStreamPolicies) {
+  QueueSizes qs{2, 2};
+
+  // Test StreamPolicyPerOperator with Dynamic executor
+  ExecutorFlags flags1 = ExecutorFlags::StreamPolicyPerOperator;
+  auto executor1 = GetExecutor(ExecutorType::Dynamic, flags1, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor1, nullptr);
+
+  // Test StreamPolicySingle with Dynamic executor
+  ExecutorFlags flags2 = ExecutorFlags::StreamPolicySingle;
+  auto executor2 = GetExecutor(ExecutorType::Dynamic, flags2, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor2, nullptr);
+
+  // Test StreamPolicyPerBackend with Dynamic executor
+  ExecutorFlags flags3 = ExecutorFlags::StreamPolicyPerBackend;
+  auto executor3 = GetExecutor(ExecutorType::Dynamic, flags3, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor3, nullptr);
+}
+
+TEST_F(ExecutorFactoryTest, TestDynamicExecutorConcurrencyModes) {
+  QueueSizes qs{2, 2};
+
+  // Test ConcurrencyNone with Dynamic executor
+  ExecutorFlags flags1 = ExecutorFlags::ConcurrencyNone;
+  auto executor1 = GetExecutor(ExecutorType::Dynamic, flags1, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor1, nullptr);
+
+  // Test ConcurrencyFull with Dynamic executor
+  ExecutorFlags flags2 = ExecutorFlags::ConcurrencyFull;
+  auto executor2 = GetExecutor(ExecutorType::Dynamic, flags2, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor2, nullptr);
+
+  // Test ConcurrencyBackend with Dynamic executor
+  ExecutorFlags flags3 = ExecutorFlags::ConcurrencyBackend;
+  auto executor3 = GetExecutor(ExecutorType::Dynamic, flags3, 4, 2, 0, 1024, qs);
+  ASSERT_NE(executor3, nullptr);
 }
 
 }  // namespace dali
