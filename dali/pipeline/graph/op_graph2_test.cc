@@ -13,8 +13,10 @@
 // limitations under the License.
 
 #include <gtest/gtest.h>
+#include <sstream>
 #include "dali/core/int_literals.h"
 #include "dali/pipeline/graph/op_graph2.h"
+#include "dali/pipeline/graph/graph2dot.h"
 
 namespace dali {
 namespace graph {
@@ -375,6 +377,209 @@ TEST(NewOpGraphBuilderTest, SortAndPrune) {
   EXPECT_EQ(op2->inputs[2], i1);
   EXPECT_EQ(op2->outputs[0], o0);
   EXPECT_EQ(op2->outputs[1], o1);
+}
+
+TEST(Graph2DotTest, GenerateDOTSimpleGraphNoColor) {
+  // Test basic DOT generation without colors, with data nodes shown
+  OpSpec spec1("dummy");
+  spec1.AddArg("device", "cpu");
+  spec1.AddOutput("output", StorageDevice::CPU);
+
+  OpGraph::Builder b;
+  b.Add("op1", spec1);
+  b.AddOutput("output_cpu");
+  OpGraph g = std::move(b).GetGraph();
+
+  std::ostringstream os;
+  GenerateDOTFromGraph(os, g, true, false);
+
+  std::string dot = os.str();
+  EXPECT_NE(dot.find("digraph graphname"), std::string::npos);
+  EXPECT_NE(dot.find("op1"), std::string::npos);
+  EXPECT_EQ(dot.find("color="), std::string::npos) << "Should not have colors";
+}
+
+TEST(Graph2DotTest, GenerateDOTWithColors) {
+  // Test DOT generation with colors for different op types
+  OpSpec spec_cpu("dummy");
+  spec_cpu.AddArg("device", "cpu");
+
+  OpSpec spec_gpu("dummy");
+  spec_gpu.AddArg("device", "gpu");
+
+  OpSpec spec_mixed("dummy");
+  spec_mixed.AddArg("device", "mixed");
+
+  OpGraph::Builder b;
+  b.Add("cpu_op", spec_cpu);
+  b.Add("gpu_op", spec_gpu);
+  b.Add("mixed_op", spec_mixed);
+  OpGraph g = std::move(b).GetGraph();
+
+  std::ostringstream os;
+  GenerateDOTFromGraph(os, g, false, true);
+
+  std::string dot = os.str();
+  EXPECT_NE(dot.find("cpu_op[color=\"blue\"]"), std::string::npos);
+  EXPECT_NE(dot.find("gpu_op[color=\"#76b900\"]"), std::string::npos);
+  EXPECT_NE(dot.find("mixed_op[color=\"cyan\"]"), std::string::npos);
+}
+
+TEST(Graph2DotTest, GenerateDOTWithDataNodes) {
+  // Test DOT generation with data nodes shown
+  OpSpec spec1("dummy");
+  spec1.AddArg("device", "cpu");
+  spec1.AddInput("in1", StorageDevice::CPU);
+  spec1.AddOutput("out1", StorageDevice::CPU);
+
+  OpSpec spec2("dummy");
+  spec2.AddArg("device", "gpu");
+  spec2.AddInput("out1", StorageDevice::CPU);
+  spec2.AddOutput("out2", StorageDevice::GPU);
+
+  OpGraph::Builder b;
+  b.Add("op1", spec1);
+  b.Add("op2", spec2);
+  b.AddOutput("out2_gpu");
+  OpGraph g = std::move(b).GetGraph();
+
+  std::ostringstream os;
+  GenerateDOTFromGraph(os, g, true, false);
+
+  std::string dot = os.str();
+  EXPECT_NE(dot.find("out1_cpu[shape=box]"), std::string::npos);
+  EXPECT_NE(dot.find("out2_gpu[shape=box]"), std::string::npos);
+  EXPECT_NE(dot.find("style=dotted"), std::string::npos);
+  EXPECT_NE(dot.find("[label=0]"), std::string::npos);
+}
+
+TEST(Graph2DotTest, BracketsInNames) {
+  // Test that brackets in names are properly replaced
+  OpSpec spec("dummy");
+  spec.AddArg("device", "cpu");
+  spec.AddOutput("output[1]", StorageDevice::CPU);
+
+  OpGraph::Builder b;
+  b.Add("op[test]", spec);
+  b.AddOutput("output[1]_cpu");
+  OpGraph g = std::move(b).GetGraph();
+
+  std::ostringstream os;
+  GenerateDOTFromGraph(os, g, true, false);
+
+  std::string dot = os.str();
+  // Check that brackets in names are replaced with underscores
+  EXPECT_NE(dot.find("op_test_"), std::string::npos);
+  EXPECT_NE(dot.find("output_1__cpu"), std::string::npos);
+  // Check that the original bracketed names don't appear
+  EXPECT_EQ(dot.find("op[test]"), std::string::npos);
+  EXPECT_EQ(dot.find("output[1]_cpu"), std::string::npos);
+}
+
+TEST(Graph2DotTest, MultipleOutputsMultipleConsumers) {
+  // Test graph with multiple outputs and consumers
+  OpSpec spec1("dummy");
+  spec1.AddArg("device", "cpu");
+  spec1.AddOutput("out1", StorageDevice::CPU);
+  spec1.AddOutput("out2", StorageDevice::CPU);
+
+  OpSpec spec2("dummy");
+  spec2.AddArg("device", "gpu");
+  spec2.AddInput("out1", StorageDevice::CPU);
+  spec2.AddInput("out2", StorageDevice::CPU);
+  spec2.AddOutput("result", StorageDevice::GPU);
+
+  OpGraph::Builder b;
+  b.Add("producer", spec1);
+  b.Add("consumer", spec2);
+  b.AddOutput("result_gpu");
+  OpGraph g = std::move(b).GetGraph();
+
+  std::ostringstream os;
+  GenerateDOTFromGraph(os, g, true, true);
+
+  std::string dot = os.str();
+  EXPECT_NE(dot.find("producer"), std::string::npos);
+  EXPECT_NE(dot.find("consumer"), std::string::npos);
+  EXPECT_NE(dot.find("out1_cpu"), std::string::npos);
+  EXPECT_NE(dot.find("out2_cpu"), std::string::npos);
+  EXPECT_NE(dot.find("result_gpu"), std::string::npos);
+}
+
+TEST(Graph2DotTest, OpWithNoOutputs) {
+  // Test op with no outputs (edge case)
+  OpSpec spec("dummy");
+  spec.AddArg("device", "cpu");
+  spec.AddArg("preserve", true);
+
+  OpGraph::Builder b;
+  b.Add("no_output_op", spec);
+  OpGraph g = std::move(b).GetGraph();
+
+  std::ostringstream os;
+  GenerateDOTFromGraph(os, g, true, true);
+
+  std::string dot = os.str();
+  EXPECT_NE(dot.find("no_output_op"), std::string::npos);
+  EXPECT_NE(dot.find("digraph graphname"), std::string::npos);
+}
+
+TEST(Graph2DotTest, ComplexGraphAllFeatures) {
+  // Test complex graph with all features enabled
+  OpSpec spec1("op1_spec");
+  spec1.AddArg("device", "cpu");
+  spec1.AddInput("input1", StorageDevice::CPU);
+  spec1.AddOutput("middle1", StorageDevice::CPU);
+  spec1.AddOutput("middle2", StorageDevice::CPU);
+
+  OpSpec spec2("op2_spec");
+  spec2.AddArg("device", "mixed");
+  spec2.AddInput("middle1", StorageDevice::CPU);
+  spec2.AddOutput("middle3", StorageDevice::GPU);
+
+  OpSpec spec3("op3_spec");
+  spec3.AddArg("device", "gpu");
+  spec3.AddInput("middle2", StorageDevice::CPU);
+  spec3.AddInput("middle3", StorageDevice::GPU);
+  spec3.AddOutput("final", StorageDevice::GPU);
+
+  OpGraph::Builder b;
+  b.Add("op1", spec1);
+  b.Add("op2", spec2);
+  b.Add("op3", spec3);
+  b.AddOutput("final_gpu");
+  OpGraph g = std::move(b).GetGraph();
+
+  std::ostringstream os;
+  GenerateDOTFromGraph(os, g, true, true);
+
+  std::string dot = os.str();
+  // Check all ops are present
+  EXPECT_NE(dot.find("op1[color=\"blue\"]"), std::string::npos);
+  EXPECT_NE(dot.find("op2[color=\"cyan\"]"), std::string::npos);
+  EXPECT_NE(dot.find("op3[color=\"#76b900\"]"), std::string::npos);
+
+  // Check data nodes
+  EXPECT_NE(dot.find("middle1_cpu[shape=box]"), std::string::npos);
+  EXPECT_NE(dot.find("middle2_cpu[shape=box]"), std::string::npos);
+  EXPECT_NE(dot.find("middle3_gpu[shape=box]"), std::string::npos);
+
+  // Check edges
+  EXPECT_NE(dot.find("op1 -> op2"), std::string::npos);
+  EXPECT_NE(dot.find("op1 -> op3"), std::string::npos);
+  EXPECT_NE(dot.find("op2 -> op3"), std::string::npos);
+}
+
+TEST(Graph2DotTest, EmptyGraph) {
+  // Test empty graph
+  OpGraph g;
+
+  std::ostringstream os;
+  GenerateDOTFromGraph(os, g, false, false);
+
+  std::string dot = os.str();
+  EXPECT_NE(dot.find("digraph graphname {"), std::string::npos);
+  EXPECT_NE(dot.find("}"), std::string::npos);
 }
 
 }  // namespace test
