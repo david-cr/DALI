@@ -16,6 +16,7 @@
 #include <stdexcept>
 
 #include "dali/pipeline/executor/lowered_graph.h"
+#include "dali/pipeline/executor/op_graph_verifier.h"
 #include "dali/test/dali_test.h"
 
 namespace dali {
@@ -1376,6 +1377,181 @@ TEST_F(OpGraphTest, TestRemovalInComplexGraph) {
 
   // Verify graph integrity after removals
   ASSERT_EQ(graph.Node(0).children.size(), 2);  // Root still has 2 children
+}
+
+// Tests for op_graph_verifier.cc coverage
+
+TEST_F(OpGraphTest, TestGraphConstraintsValidGraph) {
+  // Create a valid graph and verify CheckGraphConstraints passes
+  OpGraph graph;
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("cpu_data", StorageDevice::CPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("Copy")
+          .AddInput("cpu_data", StorageDevice::CPU)
+          .AddOutput("copy_data", StorageDevice::CPU)), "");
+
+  // This should not throw for a valid graph
+  ASSERT_NO_THROW(CheckGraphConstraints(graph));
+}
+
+TEST_F(OpGraphTest, TestGraphConstraintsValidMixedGraph) {
+  // Create a valid graph with CPU->MIXED->GPU pipeline
+  OpGraph graph;
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("cpu_data", StorageDevice::CPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("MakeContiguous")
+          .AddArg("device", "mixed")
+          .AddInput("cpu_data", StorageDevice::CPU)
+          .AddOutput("mixed_data", StorageDevice::GPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("Copy")
+          .AddArg("device", "gpu")
+          .AddInput("mixed_data", StorageDevice::GPU)
+          .AddOutput("gpu_data", StorageDevice::GPU)), "");
+
+  // This should not throw for a valid graph
+  ASSERT_NO_THROW(CheckGraphConstraints(graph));
+}
+
+TEST_F(OpGraphTest, TestGraphConstraintsValidGPUGraph) {
+  // Create a valid GPU-only graph
+  OpGraph graph;
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "gpu")
+          .AddOutput("gpu_data", StorageDevice::GPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("Copy")
+          .AddArg("device", "gpu")
+          .AddInput("gpu_data", StorageDevice::GPU)
+          .AddOutput("copy_data", StorageDevice::GPU)), "");
+
+  // This should not throw for a valid graph
+  ASSERT_NO_THROW(CheckGraphConstraints(graph));
+}
+
+TEST_F(OpGraphTest, TestGraphConstraintsComplexGraph) {
+  // Create a complex valid graph with multiple branches
+  OpGraph graph;
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("data1", StorageDevice::CPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("data2", StorageDevice::CPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("Copy")
+          .AddInput("data1", StorageDevice::CPU)
+          .AddOutput("copy1", StorageDevice::CPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("Copy")
+          .AddInput("data2", StorageDevice::CPU)
+          .AddOutput("copy2", StorageDevice::CPU)), "");
+
+  // This should not throw for a valid graph
+  ASSERT_NO_THROW(CheckGraphConstraints(graph));
+}
+
+TEST_F(OpGraphTest, TestInvalidParentOpType) {
+  // Create a VALID graph first, then corrupt it to trigger validation error
+  // MIXED ops cannot have GPU parents, only CPU or MIXED
+  OpGraph graph;
+
+  // Create a valid CPU -> MIXED pipeline
+  auto& cpu_node = graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("cpu_data", StorageDevice::CPU)), "cpu_op");
+  int cpu_id = cpu_node.id;
+
+  auto& mixed_node = graph.AddOp(this->PrepareSpec(
+          OpSpec("MakeContiguous")
+          .AddArg("device", "mixed")
+          .AddInput("cpu_data", StorageDevice::CPU)
+          .AddOutput("mixed_data", StorageDevice::GPU)), "mixed_op");
+  int mixed_id = mixed_node.id;
+
+  // NOW corrupt the parent's op_type from CPU to GPU (invalid for MIXED child)
+  auto& cpu_node_mut = const_cast<OpNode&>(graph.Node(cpu_id));
+  const_cast<OpType&>(cpu_node_mut.op_type) = OpType::GPU;
+
+  // This should throw because MIXED cannot have GPU parent
+  ASSERT_THROW(CheckGraphConstraints(graph), std::exception);
+}
+
+TEST_F(OpGraphTest, TestCPUOpWithMixedParent) {
+  // Create a VALID graph first, then corrupt it
+  // CPU ops can only have CPU parents, not MIXED
+  OpGraph graph;
+
+  // Create a valid CPU -> CPU pipeline
+  auto& cpu_parent = graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("cpu_data", StorageDevice::CPU)), "cpu_parent");
+  int parent_id = cpu_parent.id;
+
+  auto& cpu_child = graph.AddOp(this->PrepareSpec(
+          OpSpec("Copy")
+          .AddArg("device", "cpu")
+          .AddInput("cpu_data", StorageDevice::CPU)
+          .AddOutput("cpu_out", StorageDevice::CPU)), "cpu_child");
+  int child_id = cpu_child.id;
+
+  // NOW corrupt the parent's op_type from CPU to MIXED (invalid for CPU child)
+  auto& parent_mut = const_cast<OpNode&>(graph.Node(parent_id));
+  const_cast<OpType&>(parent_mut.op_type) = OpType::MIXED;
+
+  // This should throw because CPU cannot have MIXED parent
+  ASSERT_THROW(CheckGraphConstraints(graph), std::exception);
+}
+
+TEST_F(OpGraphTest, TestCPUOpWithArgumentInput) {
+  // Try to trigger CheckArgumentInputConstraints error
+  // CPU ops don't support argument inputs (tensor arguments)
+  OpGraph graph;
+
+  // Create a CPU operator
+  auto& cpu_op = graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("data", StorageDevice::CPU)), "cpu_op");
+
+  // Manually corrupt the OpSpec to add an argument input
+  // This simulates a CPU op incorrectly having argument inputs
+  auto& op_mut = const_cast<OpNode&>(graph.Node(cpu_op.id));
+  auto& spec_mut = const_cast<OpSpec&>(op_mut.spec);
+
+  // Try to add an argument input by directly manipulating internal state
+  // This is a bit of a hack, but necessary to test the defensive check
+  try {
+    spec_mut.AddArgumentInput("arg_input", "external_source_name");
+    // If we successfully added an argument input to a CPU op, this should fail validation
+    ASSERT_THROW(CheckGraphConstraints(graph), std::exception);
+  } catch (...) {
+    // If AddArgumentInput itself throws, that's also fine - it means
+    // the API prevents this scenario, which is the expected behavior
+    SUCCEED();
+  }
 }
 
 }  // namespace dali
