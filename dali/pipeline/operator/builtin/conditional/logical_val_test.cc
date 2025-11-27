@@ -21,6 +21,7 @@
 #include "dali/pipeline/data/tensor.h"
 #include "dali/pipeline/data/tensor_list.h"
 #include "dali/pipeline/operator/builtin/conditional/logical_not.h"
+#include "dali/pipeline/operator/builtin/conditional/validation.h"
 #include "dali/pipeline/operator/operator.h"
 #include "dali/pipeline/operator/op_spec.h"
 #include "dali/pipeline/workspace/workspace.h"
@@ -437,6 +438,277 @@ TYPED_TEST(LogicalNotDataTypeTest, TestDataType) {
   // Test with zero and non-zero values
   std::vector<TypeParam> input_data = {TypeParam(0), TypeParam(1), TypeParam(-1), TypeParam(42)};
   this->RunAndValidate(pipe, input_data);
+}
+
+// Test suite for validation.cc functions
+class ValidationTest : public ::testing::Test {
+ public:
+  void SetUp() override {
+    ::testing::Test::SetUp();
+    // Initialize DALI if not already initialized
+    static bool initialized = false;
+    if (!initialized) {
+      DALIInit(OpSpec("CPUAllocator"),
+               OpSpec("PinnedCPUAllocator"),
+               OpSpec("GPUAllocator"));
+      initialized = true;
+    }
+  }
+
+  // Helper function to create scalar tensor list
+  template<typename T>
+  TensorList<CPUBackend> CreateScalarInput(const std::vector<T>& input_data, DALIDataType type) {
+    TensorList<CPUBackend> input;
+    input.set_order(AccessOrder::host());
+    auto shape = uniform_list_shape(input_data.size(), TensorShape<0>{});  // Scalar values
+    input.Resize(shape, type);
+
+    for (size_t i = 0; i < input_data.size(); ++i) {
+      *input.mutable_tensor<T>(i) = input_data[i];
+    }
+
+    return input;
+  }
+
+  // Helper function to create non-scalar tensor list
+  template<typename T>
+  TensorList<CPUBackend> CreateNonScalarInput(const std::vector<T>& input_data, int dim) {
+    TensorList<CPUBackend> input;
+    input.set_order(AccessOrder::host());
+    TensorShape<> element_shape;
+    for (int i = 0; i < dim; i++) {
+      element_shape.shape.push_back(1);
+    }
+    auto shape = uniform_list_shape(input_data.size(), element_shape);
+    input.Resize(shape, type2id<T>::value);
+
+    for (size_t i = 0; i < input_data.size(); ++i) {
+      *input.mutable_tensor<T>(i) = input_data[i];
+    }
+
+    return input;
+  }
+};
+
+// Test EnforceConditionalInputKind with valid scalar bool input
+TEST_F(ValidationTest, EnforceConditionalInputKindValidBoolScalar) {
+  std::vector<bool> data = {true, false, true};
+  auto input = CreateScalarInput(data, DALI_BOOL);
+
+  // Should not throw
+  EXPECT_NO_THROW(EnforceConditionalInputKind(input, "not", "", true));
+}
+
+// Test EnforceConditionalInputKind with valid scalar int input and enforce_type=false
+TEST_F(ValidationTest, EnforceConditionalInputKindValidIntScalarNoTypeCheck) {
+  std::vector<int32_t> data = {0, 1, -1};
+  auto input = CreateScalarInput(data, DALI_INT32);
+
+  // Should not throw when enforce_type is false
+  EXPECT_NO_THROW(EnforceConditionalInputKind(input, "not", "", false));
+}
+
+// Test EnforceConditionalInputKind with non-scalar input
+TEST_F(ValidationTest, EnforceConditionalInputKindNonScalarError) {
+  std::vector<bool> data = {true, false};
+  auto input = CreateNonScalarInput(data, 1);  // 1-d tensor
+
+  // Should throw with dimension error
+  EXPECT_THROW({
+    try {
+      EnforceConditionalInputKind(input, "not", "", true);
+    } catch (const DALIException& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("scalar (0-d tensors)"), std::string::npos);
+      EXPECT_NE(error_msg.find("Got a 1-d input"), std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test EnforceConditionalInputKind with wrong type when enforce_type=true
+TEST_F(ValidationTest, EnforceConditionalInputKindWrongTypeError) {
+  std::vector<int32_t> data = {0, 1};
+  auto input = CreateScalarInput(data, DALI_INT32);
+
+  // Should throw with type error when enforce_type is true
+  EXPECT_THROW({
+    try {
+      EnforceConditionalInputKind(input, "not", "", true);
+    } catch (const DALIException& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("of `bool` type"), std::string::npos);
+      EXPECT_NE(error_msg.find("Got an input of type"), std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test EnforceConditionalInputKind with "if" name
+TEST_F(ValidationTest, EnforceConditionalInputKindIfStatement) {
+  std::vector<bool> data = {true};
+  auto input = CreateScalarInput(data, DALI_BOOL);
+
+  // Should not throw with "if" name
+  EXPECT_NO_THROW(EnforceConditionalInputKind(input, "if", "if-stmt", true));
+}
+
+// Test EnforceConditionalInputKind with "if" name and error
+TEST_F(ValidationTest, EnforceConditionalInputKindIfStatementError) {
+  std::vector<bool> data = {true};
+  auto input = CreateNonScalarInput(data, 2);  // 2-d tensor
+
+  // Should throw with "if" specific message
+  EXPECT_THROW({
+    try {
+      EnforceConditionalInputKind(input, "if", "if-stmt", true);
+    } catch (const DALIException& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Conditions inside `if` statements"), std::string::npos);
+      EXPECT_NE(error_msg.find("as a condition of the `if` statement"), std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test EnforceConditionalInputKind with "and" name
+TEST_F(ValidationTest, EnforceConditionalInputKindAndExpression) {
+  std::vector<bool> data = {true};
+  auto input = CreateScalarInput(data, DALI_BOOL);
+
+  // Should not throw with "and" name and "left"/"right" where
+  EXPECT_NO_THROW(EnforceConditionalInputKind(input, "and", "left", true));
+  EXPECT_NO_THROW(EnforceConditionalInputKind(input, "and", "right", true));
+}
+
+// Test EnforceConditionalInputKind with "and" name and error
+TEST_F(ValidationTest, EnforceConditionalInputKindAndExpressionError) {
+  std::vector<bool> data = {true};
+  auto input = CreateNonScalarInput(data, 1);
+
+  // Should throw with "and" specific message
+  EXPECT_THROW({
+    try {
+      EnforceConditionalInputKind(input, "and", "left", true);
+    } catch (const DALIException& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Logical expression `and` is restricted to"), std::string::npos);
+      EXPECT_NE(error_msg.find("as the left argument in logical expression"), std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test EnforceConditionalInputKind with "or" name
+TEST_F(ValidationTest, EnforceConditionalInputKindOrExpression) {
+  std::vector<bool> data = {false};
+  auto input = CreateScalarInput(data, DALI_BOOL);
+
+  // Should not throw with "or" name
+  EXPECT_NO_THROW(EnforceConditionalInputKind(input, "or", "left", true));
+  EXPECT_NO_THROW(EnforceConditionalInputKind(input, "or", "right", true));
+}
+
+// Test EnforceConditionalInputKind with "or" name and error
+TEST_F(ValidationTest, EnforceConditionalInputKindOrExpressionError) {
+  std::vector<bool> data = {true};
+  auto input = CreateNonScalarInput(data, 1);
+
+  // Should throw with "or" specific message
+  EXPECT_THROW({
+    try {
+      EnforceConditionalInputKind(input, "or", "right", true);
+    } catch (const DALIException& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Logical expression `or` is restricted to"), std::string::npos);
+      EXPECT_NE(error_msg.find("as the right argument in logical expression"), std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test ReportGpuInputError with "not" expression
+TEST_F(ValidationTest, ReportGpuInputErrorNot) {
+  EXPECT_THROW({
+    try {
+      ReportGpuInputError("not", "", true);
+    } catch (const DALIException& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Got a GPU input"), std::string::npos);
+      EXPECT_NE(error_msg.find("in logical expression"), std::string::npos);
+      EXPECT_NE(error_msg.find("of `bool` type"), std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test ReportGpuInputError with "if" statement
+TEST_F(ValidationTest, ReportGpuInputErrorIf) {
+  EXPECT_THROW({
+    try {
+      ReportGpuInputError("if", "if-stmt", true);
+    } catch (const DALIException& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Got a GPU input"), std::string::npos);
+      EXPECT_NE(error_msg.find("Conditions inside `if` statements"), std::string::npos);
+      EXPECT_NE(error_msg.find("as a condition of the `if` statement"), std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test ReportGpuInputError with "and" expression
+TEST_F(ValidationTest, ReportGpuInputErrorAnd) {
+  EXPECT_THROW({
+    try {
+      ReportGpuInputError("and", "left", false);
+    } catch (const DALIException& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Got a GPU input"), std::string::npos);
+      EXPECT_NE(error_msg.find("Logical expression `and`"), std::string::npos);
+      EXPECT_NE(error_msg.find("as the left argument in logical expression"), std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test ReportGpuInputError with "or" expression
+TEST_F(ValidationTest, ReportGpuInputErrorOr) {
+  EXPECT_THROW({
+    try {
+      ReportGpuInputError("or", "right", false);
+    } catch (const DALIException& e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Got a GPU input"), std::string::npos);
+      EXPECT_NE(error_msg.find("Logical expression `or`"), std::string::npos);
+      EXPECT_NE(error_msg.find("as the right argument in logical expression"), std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test EnforceConditionalInputKind with enforce_type=false and various types
+TEST_F(ValidationTest, EnforceConditionalInputKindNoTypeEnforcement) {
+  // Test with float type
+  {
+    std::vector<float> data = {0.0f, 1.0f};
+    auto input = CreateScalarInput(data, DALI_FLOAT);
+    EXPECT_NO_THROW(EnforceConditionalInputKind(input, "not", "", false));
+  }
+
+  // Test with int32 type
+  {
+    std::vector<int32_t> data = {0, 1};
+    auto input = CreateScalarInput(data, DALI_INT32);
+    EXPECT_NO_THROW(EnforceConditionalInputKind(input, "or", "left", false));
+  }
+
+  // Test with uint8 type
+  {
+    std::vector<uint8_t> data = {0, 255};
+    auto input = CreateScalarInput(data, DALI_UINT8);
+    EXPECT_NO_THROW(EnforceConditionalInputKind(input, "and", "right", false));
+  }
 }
 
 }  // namespace dali
