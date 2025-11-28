@@ -173,6 +173,36 @@ class SinkOp : public Operator<CPUBackend> {
   int64_t acc = 0;
 };
 
+constexpr char kPassThroughOpName[] = "Exec2PassThrough";
+
+/** A pass-through operator that shares data from input to output.
+ *
+ * This operator is used to test pass-through behavior and pinning propagation.
+ */
+class PassThroughOpCPU : public Operator<CPUBackend> {
+ public:
+  explicit PassThroughOpCPU(const OpSpec &spec) : Operator<CPUBackend>(spec) {
+  }
+
+  bool SetupImpl(std::vector<OutputDesc> &outs, const Workspace &ws) override {
+    outs.resize(ws.NumOutput());
+    if (ws.NumInput() > 0) {
+      auto &input = ws.Input<CPUBackend>(0);
+      outs[0].shape = input.shape();
+      outs[0].type = input.type();
+    }
+    return false;  // Don't allocate - we'll share data
+  }
+
+  void RunImpl(Workspace &ws) override {
+    if (ws.NumInput() > 0 && ws.NumOutput() > 0) {
+      auto &input = ws.Input<CPUBackend>(0);
+      auto &output = ws.Output<CPUBackend>(0);
+      output.ShareData(input);
+    }
+  }
+};
+
 }  // namespace test
 }  // namespace exec2
 }  // namespace dali

@@ -44,6 +44,12 @@ DALI_SCHEMA(Exec2Sink)
 
 DALI_REGISTER_OPERATOR(Exec2Sink, exec2::test::SinkOp, CPU);
 
+DALI_SCHEMA(Exec2PassThrough)
+  .NumInput(1)
+  .NumOutput(1);
+
+DALI_REGISTER_OPERATOR(Exec2PassThrough, exec2::test::PassThroughOpCPU, CPU);
+
 namespace exec2 {
 namespace test {
 
