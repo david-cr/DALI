@@ -63,4 +63,92 @@ TEST_F(SnapshotSerializerTest, LoaderStateSnapshot) {
   EXPECT_EQ(snapshot.age, deserialized.age);
 }
 
+// Test GPU curandState serialization/deserialization
+// Covers lines 89-93
+TEST_F(SnapshotSerializerTest, VectorCurandState) {
+  int device_count = 0;
+  CUDA_CALL(cudaGetDeviceCount(&device_count));
+  if (device_count < 1) {
+    GTEST_SKIP() << "At least 1 GPU required";
+  }
+
+  // Create a vector of curandState
+  std::vector<curandState> snapshot(5);
+
+  // Initialize curandStates with different seeds
+  for (size_t i = 0; i < snapshot.size(); i++) {
+    curand_init(123 + i, 0, 0, &snapshot[i]);
+  }
+
+  // Serialize
+  std::string serialized = SnapshotSerializer().Serialize(snapshot);
+
+  // Deserialize
+  auto deserialized = SnapshotSerializer().Deserialize<std::vector<curandState>>(serialized);
+
+  // Verify size
+  ASSERT_EQ(snapshot.size(), deserialized.size());
+
+  // Verify state is preserved by comparing binary data
+  for (size_t i = 0; i < snapshot.size(); i++) {
+    EXPECT_EQ(memcmp(&snapshot[i], &deserialized[i], sizeof(curandState)), 0);
+  }
+}
+
+// Test GPU curandState serialization with empty vector
+// Covers lines 89-93 with edge case
+TEST_F(SnapshotSerializerTest, VectorCurandStateEmpty) {
+  int device_count = 0;
+  CUDA_CALL(cudaGetDeviceCount(&device_count));
+  if (device_count < 1) {
+    GTEST_SKIP() << "At least 1 GPU required";
+  }
+
+  // Create empty vector
+  std::vector<curandState> snapshot;
+
+  // Serialize empty vector
+  std::string serialized = SnapshotSerializer().Serialize(snapshot);
+
+  // Deserialize
+  auto deserialized = SnapshotSerializer().Deserialize<std::vector<curandState>>(serialized);
+
+  // Verify empty
+  EXPECT_EQ(deserialized.size(), 0);
+}
+
+// Test GPU curandState round-trip with generated values
+// Covers lines 97-103 (deserialize path)
+TEST_F(SnapshotSerializerTest, VectorCurandStateRoundTrip) {
+  int device_count = 0;
+  CUDA_CALL(cudaGetDeviceCount(&device_count));
+  if (device_count < 1) {
+    GTEST_SKIP() << "At least 1 GPU required";
+  }
+
+  // Create and initialize curandStates
+  std::vector<curandState> original(10);
+  for (size_t i = 0; i < original.size(); i++) {
+    curand_init(456 + i * 7, i, 0, &original[i]);
+  }
+
+  // Serialize
+  std::string serialized = SnapshotSerializer().Serialize(original);
+
+  // Verify serialized data is not empty and reasonable size
+  EXPECT_GT(serialized.size(), 0);
+  // Protobuf adds overhead, so size will be >= raw data size
+  EXPECT_GE(serialized.size(), original.size() * sizeof(curandState));
+
+  // Deserialize
+  auto restored = SnapshotSerializer().Deserialize<std::vector<curandState>>(serialized);
+
+  // Verify exact match
+  ASSERT_EQ(original.size(), restored.size());
+  for (size_t i = 0; i < original.size(); i++) {
+    EXPECT_EQ(memcmp(&original[i], &restored[i], sizeof(curandState)), 0)
+        << "Mismatch at index " << i;
+  }
+}
+
 }  // namespace dali
