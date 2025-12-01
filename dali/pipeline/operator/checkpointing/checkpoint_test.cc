@@ -542,4 +542,16 @@ TEST_F(CheckpointTest, DeserializeUnrecognizedOperator) {
                std::runtime_error);
 }
 
+// Test OpCheckpoint::SetOrder with empty AccessOrder (covers op_checkpoint.cc line 35)
+TEST_F(CheckpointTest, SetOrderWithEmptyAccessOrder) {
+  OpCheckpoint op_checkpoint("test_op");
+
+  // Try to set an empty AccessOrder - should throw
+  AccessOrder empty_order;  // Default constructor creates empty order
+  EXPECT_THROW(op_checkpoint.SetOrder(empty_order), std::runtime_error);
+
+  // Verify valid AccessOrder works
+  EXPECT_NO_THROW(op_checkpoint.SetOrder(AccessOrder::host()));
+}
+
 }  // namespace dali
