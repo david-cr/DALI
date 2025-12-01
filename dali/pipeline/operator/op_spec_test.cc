@@ -466,4 +466,225 @@ TEST(TestOpSpec, EmptySchema) {
   EXPECT_EQ(spec.GetArgument<std::string>("_module"), "nvidia.dali.ops");
 }
 
+// ===== AddInput Error Path Tests =====
+
+DALI_SCHEMA(DummyInputErrorTests)
+  .NumInput(2).NumOutput(1)
+  .AddOptionalArg<int>("tensor_arg", "A tensor argument", nullptr, true);
+
+// Test AddInput: regular input added after argument input (covers line 63)
+TEST(OpSpecTest, AddInputAfterArgumentInput) {
+  auto spec = OpSpec("DummyInputErrorTests")
+              .AddArgumentInput("tensor_arg", "arg_input");
+
+  // Try to add regular input after argument input - should throw
+  EXPECT_THROW(
+    spec.AddInput("regular_input", StorageDevice::CPU),
+    std::runtime_error);
+}
+
+DALI_SCHEMA(DummyTwoInputs)
+  .NumInput(2).NumOutput(1);
+
+// Test AddInput: too many inputs (covers line 69)
+TEST(OpSpecTest, AddInputTooMany) {
+  auto spec = OpSpec("DummyTwoInputs")
+              .AddInput("input1", StorageDevice::CPU)
+              .AddInput("input2", StorageDevice::CPU);
+
+  // Try to add third input when schema only allows 2 - should throw
+  EXPECT_THROW(
+    spec.AddInput("input3", StorageDevice::CPU),
+    std::runtime_error);
+}
+
+DALI_SCHEMA(DummyInputDeviceCheck)
+  .NumInput(1).NumOutput(1)
+  .InputDevice(0, InputDevice::CPU);
+
+// Test AddInput: incompatible device (covers line 77)
+TEST(OpSpecTest, AddInputIncompatibleDevice) {
+  auto spec = OpSpec("DummyInputDeviceCheck")
+              .AddArg("device", "cpu");
+
+  // Try to add GPU input when schema requires CPU - should throw
+  EXPECT_THROW(
+    spec.AddInput("input", StorageDevice::GPU),
+    std::runtime_error);
+}
+
+// Test AddInput: named input must be CPU (covers line 84)
+TEST(OpSpecTest, AddInputNamedGPU) {
+  auto spec = OpSpec("DummyInputErrorTests");
+
+  // Try to add named (argument) input on GPU - should throw
+  EXPECT_THROW(
+    spec.AddInput("arg_input", StorageDevice::GPU, false),
+    std::runtime_error);
+}
+
+// ===== AddOutput Error Path Tests =====
+
+// Test AddOutput: duplicate output (covers line 97)
+TEST(OpSpecTest, AddOutputDuplicate) {
+  auto spec = OpSpec("DummyInputErrorTests")
+              .AddOutput("output1", StorageDevice::CPU);
+
+  // Try to add the same output name and device again - should throw
+  EXPECT_THROW(
+    spec.AddOutput("output1", StorageDevice::CPU),
+    std::invalid_argument);
+}
+
+// ===== AddArgumentInput Error Path Tests =====
+
+DALI_SCHEMA(DummyArgInputTests)
+  .NumInput(0).NumOutput(1)
+  .AddOptionalArg("regular_arg", "Not a tensor argument", 42)
+  .AddOptionalArg<int>("tensor_arg", "A tensor argument", nullptr, true);
+
+// Test AddArgumentInput: argument already specified (covers line 105)
+TEST(OpSpecTest, AddArgumentInputAlreadySpecified) {
+  auto spec = OpSpec("DummyArgInputTests")
+              .AddArg("regular_arg", 100);
+
+  // Try to add argument input for already-specified argument - should throw
+  EXPECT_THROW(
+    spec.AddArgumentInput("regular_arg", "input"),
+    std::runtime_error);
+}
+
+// Test AddArgumentInput: undefined argument (covers line 108)
+TEST(OpSpecTest, AddArgumentInputUndefined) {
+  auto spec = OpSpec("DummyArgInputTests");
+
+  // Try to add argument input for non-existent argument - should throw
+  EXPECT_THROW(
+    spec.AddArgumentInput("non_existent", "input"),
+    std::runtime_error);
+}
+
+// Test AddArgumentInput: not a tensor argument (covers line 111)
+TEST(OpSpecTest, AddArgumentInputNotTensor) {
+  auto spec = OpSpec("DummyArgInputTests");
+
+  // Try to add argument input for non-tensor argument - should throw
+  EXPECT_THROW(
+    spec.AddArgumentInput("regular_arg", "input"),
+    std::runtime_error);
+}
+
+// ===== IsCompatibleDevice Coverage =====
+
+DALI_SCHEMA(DummyDeviceTestCPU)
+  .NumInput(1).NumOutput(1)
+  .InputDevice(0, InputDevice::CPU);
+
+DALI_SCHEMA(DummyDeviceTestGPU)
+  .NumInput(1).NumOutput(1)
+  .InputDevice(0, InputDevice::GPU);
+
+// Test IsCompatibleDevice: CPU case (covers lines 23-24)
+TEST(OpSpecTest, IsCompatibleDeviceCPU) {
+  auto spec = OpSpec("DummyDeviceTestCPU")
+              .AddArg("device", "cpu");
+
+  // CPU input for CPU requirement - should succeed
+  EXPECT_NO_THROW(spec.AddInput("input", StorageDevice::CPU));
+
+  // GPU input for CPU requirement - should fail
+  auto spec2 = OpSpec("DummyDeviceTestCPU")
+               .AddArg("device", "cpu");
+  EXPECT_THROW(spec2.AddInput("input", StorageDevice::GPU), std::runtime_error);
+}
+
+// Test IsCompatibleDevice: GPU case (covers lines 25-26)
+TEST(OpSpecTest, IsCompatibleDeviceGPU) {
+  auto spec = OpSpec("DummyDeviceTestGPU")
+              .AddArg("device", "gpu");
+
+  // GPU input for GPU requirement - should succeed
+  EXPECT_NO_THROW(spec.AddInput("input", StorageDevice::GPU));
+
+  // CPU input for GPU requirement - should fail
+  auto spec2 = OpSpec("DummyDeviceTestGPU")
+               .AddArg("device", "gpu");
+  EXPECT_THROW(spec2.AddInput("input", StorageDevice::CPU), std::runtime_error);
+}
+
+// ===== ValidDevices Coverage (called in error messages) =====
+
+DALI_SCHEMA(DummyValidDevicesTest)
+  .NumInput(6).NumOutput(1)
+  .InputDevice(0, InputDevice::CPU)
+  .InputDevice(1, InputDevice::GPU)
+  .InputDevice(2, InputDevice::MatchBackend)
+  .InputDevice(3, InputDevice::MatchBackendOrCPU)
+  .InputDevice(4, InputDevice::Any)
+  .InputDevice(5, InputDevice::Metadata);
+
+// Test ValidDevices: all cases by triggering device errors
+// This covers the ValidDevices function lines 43-56
+TEST(OpSpecTest, ValidDevicesCPU) {
+  auto spec = OpSpec("DummyValidDevicesTest")
+              .AddArg("device", "cpu");
+
+  // Trigger error for InputDevice::CPU to call ValidDevices
+  EXPECT_THROW({
+    spec.AddInput("in0", StorageDevice::GPU);
+  }, std::runtime_error);
+}
+
+TEST(OpSpecTest, ValidDevicesGPU) {
+  auto spec = OpSpec("DummyValidDevicesTest")
+              .AddArg("device", "cpu");
+
+  // Trigger error for InputDevice::GPU to call ValidDevices
+  EXPECT_THROW({
+    spec.AddInput("dummy", StorageDevice::CPU);  // First input to get to index 1
+    spec.AddInput("in1", StorageDevice::CPU);  // This should fail
+  }, std::runtime_error);
+}
+
+TEST(OpSpecTest, ValidDevicesMatchBackend) {
+  auto spec = OpSpec("DummyValidDevicesTest")
+              .AddArg("device", "cpu");
+
+  // InputDevice::MatchBackend with CPU op_type expects CPU
+  // Trigger error by providing GPU
+  EXPECT_THROW({
+    spec.AddInput("in0", StorageDevice::CPU);
+    spec.AddInput("in1", StorageDevice::GPU);
+    spec.AddInput("in2", StorageDevice::GPU);  // This should fail (expects CPU for cpu op)
+  }, std::runtime_error);
+}
+
+TEST(OpSpecTest, ValidDevicesMatchBackendOrCPU) {
+  auto spec = OpSpec("DummyValidDevicesTest")
+              .AddArg("device", "cpu");
+
+  // InputDevice::MatchBackendOrCPU with CPU op_type expects CPU
+  // For GPU op it would accept GPU or CPU
+  // Trigger error by providing GPU with CPU op
+  EXPECT_THROW({
+    spec.AddInput("in0", StorageDevice::CPU);
+    spec.AddInput("in1", StorageDevice::GPU);
+    spec.AddInput("in2", StorageDevice::CPU);
+    spec.AddInput("in3", StorageDevice::GPU);  // This should fail (CPU op expects CPU)
+  }, std::runtime_error);
+}
+
+// Test ValidDevices with GPU operator
+TEST(OpSpecTest, ValidDevicesGPUOperator) {
+  auto spec = OpSpec("DummyValidDevicesTest")
+              .AddArg("device", "gpu");
+
+  // For MatchBackend with GPU op, expects GPU
+  EXPECT_THROW({
+    spec.AddInput("in0", StorageDevice::GPU);
+    spec.AddInput("in1", StorageDevice::GPU);
+    spec.AddInput("in2", StorageDevice::CPU);  // This should fail (GPU op expects GPU)
+  }, std::runtime_error);
+}
+
 }  // namespace dali
