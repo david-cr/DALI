@@ -404,4 +404,142 @@ TEST_F(CheckpointTest, Serialize) {
     EXPECT_EQ(deserialized.GetOpCheckpoint(i).CheckpointState<uint8_t>(), i);
 }
 
+// Test AddOperator with duplicate name (covers line 32)
+TEST_F(CheckpointTest, AddOperatorDuplicateName) {
+  Checkpoint checkpoint;
+  checkpoint.AddOperator("op1");
+
+  // Try adding the same operator name again
+  EXPECT_THROW(checkpoint.AddOperator("op1"), std::runtime_error);
+}
+
+// Test OperatorIdx returns nullopt for missing operator (covers line 40)
+TEST_F(CheckpointTest, OperatorIdxNotFound) {
+  Checkpoint checkpoint;
+  checkpoint.AddOperator("existing_op");
+
+  // Query for non-existent operator
+  auto idx = checkpoint.OperatorIdx("non_existent_op");
+  EXPECT_FALSE(idx.has_value());
+
+  // Verify existing operator works
+  auto existing_idx = checkpoint.OperatorIdx("existing_op");
+  EXPECT_TRUE(existing_idx.has_value());
+  EXPECT_EQ(*existing_idx, 0);
+}
+
+// Test GetOpCheckpoint by name with missing operator (covers line 47)
+TEST_F(CheckpointTest, GetOpCheckpointByNameNotFound) {
+  Checkpoint checkpoint;
+  checkpoint.AddOperator("existing_op");
+
+  // Try to get checkpoint for non-existent operator
+  EXPECT_THROW(checkpoint.GetOpCheckpoint("non_existent_op"), std::runtime_error);
+}
+
+// Test GetOpCheckpoint by index with invalid index (covers lines 52)
+TEST_F(CheckpointTest, GetOpCheckpointByIndexInvalid) {
+  Checkpoint checkpoint;
+  checkpoint.AddOperator("op1");
+  checkpoint.AddOperator("op2");
+
+  // Try negative index
+  EXPECT_THROW(checkpoint.GetOpCheckpoint(-1), std::runtime_error);
+
+  // Try index beyond range
+  EXPECT_THROW(checkpoint.GetOpCheckpoint(2), std::runtime_error);
+  EXPECT_THROW(checkpoint.GetOpCheckpoint(100), std::runtime_error);
+
+  // Verify valid indices work
+  EXPECT_NO_THROW(checkpoint.GetOpCheckpoint(0));
+  EXPECT_NO_THROW(checkpoint.GetOpCheckpoint(1));
+}
+
+// Test const GetOpCheckpoint by index with invalid index (covers lines 57)
+TEST_F(CheckpointTest, GetOpCheckpointByIndexInvalidConst) {
+  Checkpoint checkpoint;
+  checkpoint.AddOperator("op1");
+  checkpoint.AddOperator("op2");
+
+  const Checkpoint& const_checkpoint = checkpoint;
+
+  // Try negative index
+  EXPECT_THROW(const_checkpoint.GetOpCheckpoint(-1), std::runtime_error);
+
+  // Try index beyond range
+  EXPECT_THROW(const_checkpoint.GetOpCheckpoint(2), std::runtime_error);
+  EXPECT_THROW(const_checkpoint.GetOpCheckpoint(100), std::runtime_error);
+
+  // Verify valid indices work
+  EXPECT_NO_THROW(const_checkpoint.GetOpCheckpoint(0));
+  EXPECT_NO_THROW(const_checkpoint.GetOpCheckpoint(1));
+}
+
+// Test SetIterationId and GetIterationId
+TEST_F(CheckpointTest, IterationId) {
+  Checkpoint checkpoint;
+
+  // Default iteration_id should be 0
+  EXPECT_EQ(checkpoint.GetIterationId(), 0);
+
+  // Set and verify
+  checkpoint.SetIterationId(42);
+  EXPECT_EQ(checkpoint.GetIterationId(), 42);
+
+  checkpoint.SetIterationId(100);
+  EXPECT_EQ(checkpoint.GetIterationId(), 100);
+}
+
+// Test Clear resets iteration_id
+TEST_F(CheckpointTest, ClearResetsIterationId) {
+  Checkpoint checkpoint;
+  checkpoint.AddOperator("op1");
+  checkpoint.SetIterationId(123);
+
+  EXPECT_EQ(checkpoint.NumOp(), 1);
+  EXPECT_EQ(checkpoint.GetIterationId(), 123);
+
+  checkpoint.Clear();
+
+  EXPECT_EQ(checkpoint.NumOp(), 0);
+  EXPECT_EQ(checkpoint.GetIterationId(), 0);
+}
+
+// Test DeserializeFromProtobuf with unrecognized operator (covers line 102)
+TEST_F(CheckpointTest, DeserializeUnrecognizedOperator) {
+  // Create checkpoint with TestStatefulSource and serialize it
+  Checkpoint checkpoint;
+  OpGraph graph1;
+  auto exec1 = GetSimpleExecutor();
+
+  graph1.AddOp(this->PrepareSpec(
+    OpSpec("TestStatefulSource")
+    .AddArg("device", "cpu")
+    .AddArg("epoch_size", 1)
+    .AddOutput("data_1", StorageDevice::CPU)), "unique_source_name");
+
+  exec1->Build(&graph1, {"data_1_cpu"});
+  BuildFromLegacyGraph(checkpoint, graph1);
+  checkpoint.GetOpCheckpoint(0).MutableCheckpointState() = static_cast<uint8_t>(42);
+
+  auto serialized = checkpoint.SerializeToProtobuf(*exec1);
+
+  // Create a different executor with TestStatefulOp (different operator)
+  OpGraph graph2;
+  auto exec2 = GetSimpleExecutor();
+
+  graph2.AddOp(this->PrepareSpec(
+    OpSpec("TestStatefulSource")
+    .AddArg("device", "cpu")
+    .AddArg("epoch_size", 1)
+    .AddOutput("different_output", StorageDevice::CPU)), "different_name");
+
+  exec2->Build(&graph2, {"different_output_cpu"});
+
+  // Try to deserialize with exec2 which doesn't have "unique_source_name"
+  Checkpoint deserialized;
+  EXPECT_THROW(deserialized.DeserializeFromProtobuf(*exec2, serialized),
+               std::runtime_error);
+}
+
 }  // namespace dali
