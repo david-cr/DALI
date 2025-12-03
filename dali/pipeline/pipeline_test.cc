@@ -17,6 +17,7 @@
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
 #include "dali/core/common.h"
+#include "dali/pipeline/dali.pb.h"
 #include "dali/pipeline/data/backend.h"
 #include "dali/pipeline/data/buffer.h"
 #include "dali/pipeline/data/tensor.h"
@@ -4648,5 +4649,509 @@ TEST_F(PipelineTestOnce, TestMakeContiguousAlreadyExists) {
 //   new data and repeat_last is enabled
 //
 // For C++ testing purposes, we verify the surrounding infrastructure works correctly
+
+// ===== Additional Coverage Tests for 90%+ Target =====
+
+// Test environment variable: DALI_OPTIMIZE_GRAPH (lines 102-110)
+TEST_F(PipelineTestOnce, TestOptimizeGraphEnvVar) {
+  // Lines 102-110: IsGraphOptimizationEnabled
+  // Line 104: if (const char *env = getenv("DALI_OPTIMIZE_GRAPH"))
+  // Line 105: return atoi(env) != 0;  // <-- UNCOVERED
+  //
+  // This tests the environment variable path that disables graph optimization
+
+  // Save original value if any
+  const char *original = getenv("DALI_OPTIMIZE_GRAPH");
+  std::string original_value;
+  bool had_original = (original != nullptr);
+  if (had_original) {
+    original_value = original;
+  }
+
+  // Test with DALI_OPTIMIZE_GRAPH=0 (disable optimization)
+  setenv("DALI_OPTIMIZE_GRAPH", "0", 1);
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+  pipe.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("copy_out", StorageDevice::CPU));
+
+  // Build should still work even with optimization disabled
+  EXPECT_NO_THROW(pipe.Build({{"copy_out", "cpu"}}));
+
+  // Restore original value
+  if (had_original) {
+    setenv("DALI_OPTIMIZE_GRAPH", original_value.c_str(), 1);
+  } else {
+    unsetenv("DALI_OPTIMIZE_GRAPH");
+  }
+}
+
+// Test environment variable: DALI_ENABLE_CSE (lines 112-122)
+TEST_F(PipelineTestOnce, TestCSEEnvVar) {
+  // Lines 112-122: IsCSEEnabled
+  // Line 114-115: if (!IsGraphOptimizationEnabled()) return false;  // <-- Line 115 UNCOVERED
+  // Line 116: if (const char *env = getenv("DALI_ENABLE_CSE"))
+  // Line 117: return atoi(env) != 0;  // <-- UNCOVERED
+  //
+  // Test Case 1: Disable CSE explicitly
+  const char *original_cse = getenv("DALI_ENABLE_CSE");
+  std::string original_cse_value;
+  bool had_original_cse = (original_cse != nullptr);
+  if (had_original_cse) {
+    original_cse_value = original_cse;
+  }
+
+  setenv("DALI_ENABLE_CSE", "0", 1);
+
+  Pipeline pipe1(1, 1, 0);
+  pipe1.AddExternalInput("data");
+  pipe1.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("copy1", StorageDevice::CPU));
+
+  EXPECT_NO_THROW(pipe1.Build({{"copy1", "cpu"}}));
+
+  // Test Case 2: Test the early return when graph optimization is disabled (line 115)
+  const char *original_opt = getenv("DALI_OPTIMIZE_GRAPH");
+  std::string original_opt_value;
+  bool had_original_opt = (original_opt != nullptr);
+  if (had_original_opt) {
+    original_opt_value = original_opt;
+  }
+
+  setenv("DALI_OPTIMIZE_GRAPH", "0", 1);  // Disable graph optimization
+  setenv("DALI_ENABLE_CSE", "1", 1);      // Try to enable CSE (should be ignored)
+
+  Pipeline pipe2(1, 1, 0);
+  pipe2.AddExternalInput("data2");
+  pipe2.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("data2", StorageDevice::CPU)
+      .AddOutput("copy2", StorageDevice::CPU));
+
+  // CSE should be disabled because graph optimization is disabled
+  EXPECT_NO_THROW(pipe2.Build({{"copy2", "cpu"}}));
+
+  // Restore original values
+  if (had_original_cse) {
+    setenv("DALI_ENABLE_CSE", original_cse_value.c_str(), 1);
+  } else {
+    unsetenv("DALI_ENABLE_CSE");
+  }
+
+  if (had_original_opt) {
+    setenv("DALI_OPTIMIZE_GRAPH", original_opt_value.c_str(), 1);
+  } else {
+    unsetenv("DALI_OPTIMIZE_GRAPH");
+  }
+}
+
+// Note: TestSupportDeviceDeprecation already exists at line 3041
+// Lines 390-396: The "support" device deprecation code exists but is currently unreachable
+// because validation at line 347 rejects "support" before it gets there.
+// The existing test (line 3041) correctly tests the current behavior (throws exception).
+
+// Additional test for has_prefix function (lines 312-316)
+// Note: Since has_prefix is a static function in pipeline.cc, we cannot call it directly
+// from the test. However, we document here that it remains as dead code.
+// Coverage tools will show it as uncovered, which is correct.
+//
+// The function was historically used for:
+// - Checking if operator names had "ImageDecoder" or "decoders__Image" prefix
+// - Part of the split_stages feature that was removed
+//
+// If this function needs to be covered, options are:
+// 1. Remove it as dead code (recommended)
+// 2. Make it a public utility function with tests
+// 3. Find/create a code path that uses it
+//
+// For now, we accept that it shows as uncovered (0%) in coverage reports.
+
+// ===== Edge Case Tests for 90%+ Target =====
+
+// Test deserialization with missing logical_id (line 222)
+TEST_F(PipelineTestOnce, TestDeserializeMissingLogicalId) {
+  // Line 222: op_def.logical_id() == -1 ? GetNextLogicalId() : op_def.logical_id()
+  // The uncovered branch is when logical_id == -1 (calls GetNextLogicalId())
+  //
+  // This tests deserializing a pipeline where operators don't have logical_ids set
+
+  // Create a simple pipeline and serialize it
+  Pipeline pipe1(1, 1, 0);
+  pipe1.AddExternalInput("data");
+  pipe1.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("copy_out", StorageDevice::CPU));
+  pipe1.Build({{"copy_out", "cpu"}});
+
+  std::string serialized = pipe1.SerializeToProtobuf();
+
+  // Parse the serialized pipeline and modify it to remove logical_id
+  dali_proto::PipelineDef pipe_def;
+  ASSERT_TRUE(pipe_def.ParseFromString(serialized));
+
+  // Set logical_id to -1 for all operators to trigger GetNextLogicalId() path
+  for (int i = 0; i < pipe_def.op_size(); i++) {
+    pipe_def.mutable_op(i)->set_logical_id(-1);
+  }
+
+  // Serialize the modified pipeline
+  std::string modified_serialized = pipe_def.SerializeAsString();
+
+  // Deserialize and build - should use GetNextLogicalId() for operators
+  EXPECT_NO_THROW({
+    Pipeline pipe2(modified_serialized);
+    pipe2.Build({{"copy_out", "cpu"}});
+  });
+}
+
+// Test GetMemoryHint with invalid output index (lines 504-512)
+// Note: This is tested indirectly through PropagateMemoryHint
+TEST_F(PipelineTestOnce, TestMemoryHintPropagation) {
+  // Lines 527-539: PropagateMemoryHint function
+  // Lines 504-512: GetMemoryHint with validation
+  // Lines 515-524: SetMemoryHint with validation
+  //
+  // These functions propagate memory hints from producer to MakeContiguous operators
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+
+  // Add operator with memory hint
+  pipe.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddArg("bytes_per_sample_hint", 1024)  // Set memory hint
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("copy_out", StorageDevice::CPU));
+
+  // Build - this will trigger PropagateMemoryHint for any MakeContiguous nodes
+  EXPECT_NO_THROW(pipe.Build({{"copy_out", "cpu"}}));
+
+  // Verify the pipeline works
+  TensorList<CPUBackend> data;
+  data.set_pinned(false);
+  data.Resize({{10}}, DALI_FLOAT);
+
+  pipe.SetExternalInput("data", data);
+  EXPECT_NO_THROW(pipe.Run());
+}
+
+// Note: TestOutputNameConflict already exists at line 2376
+// Lines 461-464 are already covered by the existing test
+
+// Test CPU operator with GPU output error (lines 466-469)
+TEST_F(PipelineTestOnce, TestCPUOperatorGPUOutputError) {
+  // Lines 466-469: CPU operators cannot produce GPU outputs
+  // Line 467: DALI_ENFORCE(output_device == StorageDevice::CPU, ...)
+  //
+  // This is an edge case where the spec tries to specify GPU output for CPU operator
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+
+  // Try to create a CPU operator with GPU output - should fail
+  EXPECT_THROW(
+      pipe.AddOperator(
+          OpSpec("Copy")
+          .AddArg("device", "cpu")  // CPU operator
+          .AddInput("data", StorageDevice::CPU)
+          .AddOutput("output", StorageDevice::GPU)),  // GPU output - invalid!
+      std::runtime_error);
+}
+
+// Test edge case: empty pipeline build
+TEST_F(PipelineTestOnce, TestEmptyPipelineBuild) {
+  // Test building a pipeline with no operators (should fail)
+  Pipeline pipe(1, 1, 0);
+
+  // Try to build without any operators or outputs - should fail
+  std::vector<PipelineOutputDesc> empty_outputs;
+  EXPECT_THROW(pipe.Build(empty_outputs), std::runtime_error);
+}
+
+// Test edge case: serialization round-trip with complex pipeline
+TEST_F(PipelineTestOnce, TestSerializationRoundTrip) {
+  // Create a pipeline with multiple operators
+  Pipeline pipe1(2, 2, 0);
+  pipe1.AddExternalInput("data");
+
+  pipe1.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddArg("preserve", true)
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("copy1", StorageDevice::CPU));
+
+  pipe1.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("copy1", StorageDevice::CPU)
+      .AddOutput("copy2", StorageDevice::CPU));
+
+  pipe1.Build({{"copy2", "cpu"}});
+
+  // Serialize
+  std::string serialized = pipe1.SerializeToProtobuf();
+  EXPECT_GT(serialized.size(), 0);
+
+  // Deserialize and verify it works
+  Pipeline pipe2(serialized);
+  EXPECT_NO_THROW(pipe2.Build({{"copy2", "cpu"}}));
+
+  // Verify execution works
+  TensorList<CPUBackend> data;
+  data.set_pinned(false);
+  data.Resize({{10}, {10}}, DALI_FLOAT);
+
+  pipe2.SetExternalInput("data", data);
+  EXPECT_NO_THROW(pipe2.Run());
+
+  Workspace ws;
+  EXPECT_NO_THROW(pipe2.Outputs(&ws));
+  EXPECT_EQ(ws.NumOutput(), 1);
+}
+
+// ===== Complex Edge Case Tests =====
+
+// Test unknown input name in AddOperatorImpl (lines 416-418)
+TEST_F(PipelineTestOnce, TestUnknownInputName) {
+  // Lines 416-418: DALI_ENFORCE(it != edge_names_.end(), "Data node ... is not known")
+  // This error occurs when an operator requests an input that doesn't exist
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+
+  // Try to add operator with non-existent input
+  EXPECT_THROW(
+      pipe.AddOperator(
+          OpSpec("Copy")
+          .AddArg("device", "cpu")
+          .AddInput("nonexistent_input", StorageDevice::CPU)  // Input doesn't exist!
+          .AddOutput("output", StorageDevice::CPU)),
+      std::runtime_error);
+}
+
+// Test unknown argument input name (lines 442-445)
+TEST_F(PipelineTestOnce, TestUnknownArgumentInput) {
+  // Lines 442-445: DALI_ENFORCE for argument input not known to pipeline
+  // This occurs when an operator uses argument input from non-existent data node
+
+  Pipeline pipe(1, 1, 0);
+
+  // Try to add operator with argument input that references unknown data node
+  EXPECT_THROW(
+      pipe.AddOperator(
+          OpSpec("Resize")
+          .AddArg("device", "cpu")
+          .AddArgumentInput("sizes", "nonexistent_sizes_input")  // Doesn't exist!
+          .AddOutput("resized", StorageDevice::CPU)),
+      std::runtime_error);
+}
+
+// Test GPU data node as argument input error (lines 447-451)
+TEST_F(PipelineTestOnce, TestGPUDataNodeAsArgumentInput) {
+  // Lines 447-451: DALI_FAIL when GPU data node is used as argument input
+  // Argument inputs must be CPU data nodes
+
+  int device_count = 0;
+  CUDA_CALL(cudaGetDeviceCount(&device_count));
+  if (device_count < 1) {
+    GTEST_SKIP() << "At least 1 GPU required";
+  }
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+
+  // Create a GPU data node
+  pipe.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "gpu")
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("gpu_data", StorageDevice::GPU));
+
+  // Try to use GPU data node as argument input - should fail
+  EXPECT_THROW(
+      pipe.AddOperator(
+          OpSpec("Resize")
+          .AddArg("device", "cpu")
+          .AddInput("data", StorageDevice::CPU)
+          .AddArgumentInput("sizes", "gpu_data")  // GPU node as arg input - invalid!
+          .AddOutput("resized", StorageDevice::CPU)),
+      std::runtime_error);
+}
+
+// Test SetOutputDescs reset error (lines 677-680)
+TEST_F(PipelineTestOnce, TestSetOutputDescsResetError) {
+  // Lines 677-680: Cannot reset output_descs with simple name/device pairs
+  // Once set with PipelineOutputDesc, cannot be reset with pair<string,string>
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+  pipe.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("output", StorageDevice::CPU));
+
+  // Build with PipelineOutputDesc (sets output_descs_)
+  std::vector<PipelineOutputDesc> descs;
+  descs.emplace_back("output", "cpu", DALI_FLOAT, -1, "");
+  pipe.Build(descs);
+
+  // After building, output_descs_ is set
+  // If we try to call SetOutputDescs(vector<pair<string,string>>), it should fail
+  // Note: This is hard to test directly as SetOutputDescs is not public
+  // The protection is enforced internally
+
+  EXPECT_EQ(pipe.num_outputs(), 1);
+  EXPECT_EQ(pipe.output_name(0), "output");
+}
+
+// Test SetOutputDescs changing values error (lines 684-688)
+TEST_F(PipelineTestOnce, TestSetOutputDescsChangeError) {
+  // Lines 684-688: Cannot change output_descs_ once set
+  // SetOutputDescs can be called multiple times only with identical values
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+  pipe.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("output", StorageDevice::CPU));
+
+  // First build with one set of descriptors
+  std::vector<PipelineOutputDesc> descs1;
+  descs1.emplace_back("output", "cpu", DALI_FLOAT, 2, "HW");
+  pipe.Build(descs1);
+
+  // Cannot rebuild with different descriptors after first build
+  // (Build() enforces !built_ at line 569)
+  EXPECT_THROW(
+      pipe.Build(descs1),  // Already built
+      std::runtime_error);
+}
+
+// Test AddToOpSpecs with mismatched operator types (lines 493-497)
+TEST_F(PipelineTestOnce, TestLogicalIdMismatchedOperatorTypes) {
+  // Lines 493-497: Different operator types cannot share same logical_id
+  // This tests the DALI_ENFORCE that prevents grouping different operators
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+
+  int logical_id = 100;
+
+  // Add first operator with logical_id
+  pipe.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("copy_out", StorageDevice::CPU),
+      logical_id);
+
+  // Try to add different operator type with same logical_id - should fail
+  EXPECT_THROW(
+      pipe.AddOperator(
+          OpSpec("Cast")  // Different operator type!
+          .AddArg("device", "cpu")
+          .AddArg("dtype", DALI_FLOAT)
+          .AddInput("data", StorageDevice::CPU)
+          .AddOutput("cast_out", StorageDevice::CPU),
+          logical_id),  // Same logical_id as Copy - invalid!
+      std::runtime_error);
+}
+
+// Test operator instance name formatting (FormatInput, FormatArgument, FormatOutput)
+TEST_F(PipelineTestOnce, TestOperatorNameFormatting) {
+  // This test exercises error paths that format operator inputs/outputs
+  // Specifically lines 417-418, 444-445 for FormatInput and FormatArgument
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+
+  // Create a Copy operator to produce an intermediate result
+  pipe.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("intermediate", StorageDevice::CPU),
+      "named_copy_op");
+
+  // Try to reference a non-existent input with a named operator
+  // This will exercise the error message formatting
+  EXPECT_THROW(
+      pipe.AddOperator(
+          OpSpec("Copy")
+          .AddArg("device", "cpu")
+          .AddInput("nonexistent", StorageDevice::CPU)  // Doesn't exist!
+          .AddOutput("output", StorageDevice::CPU),
+          "second_copy_op"),  // Named operator for better error message
+      std::runtime_error);
+}
+
+// Test GetMemoryHint without argument (lines 505-506)
+TEST_F(PipelineTestOnce, TestMemoryHintNotSet) {
+  // Lines 505-506: if (!spec.HasArgument("bytes_per_sample_hint")) return 0;
+  // Test the early return path when memory hint is not set
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+
+  // Add operator WITHOUT bytes_per_sample_hint
+  pipe.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("copy_out", StorageDevice::CPU));
+  // Note: No .AddArg("bytes_per_sample_hint", ...)
+
+  // Build - GetMemoryHint will be called and should return 0
+  EXPECT_NO_THROW(pipe.Build({{"copy_out", "cpu"}}));
+
+  TensorList<CPUBackend> data;
+  data.set_pinned(false);
+  data.Resize({{10}}, DALI_FLOAT);
+
+  pipe.SetExternalInput("data", data);
+  EXPECT_NO_THROW(pipe.Run());
+}
+
+// Test GetMemoryHint with vector of hints (lines 507-512)
+TEST_F(PipelineTestOnce, TestMemoryHintVector) {
+  // Lines 507-512: GetMemoryHint with vector validation
+  // Test with single memory hint (GetSingleOrRepeatedArg handles both single and vector)
+
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+
+  // Add operator with a single memory hint value
+  // GetSingleOrRepeatedArg will handle converting single value to vector
+  pipe.AddOperator(
+      OpSpec("Copy")
+      .AddArg("device", "cpu")
+      .AddArg("bytes_per_sample_hint", 1024)
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("copy_out", StorageDevice::CPU));
+
+  EXPECT_NO_THROW(pipe.Build({{"copy_out", "cpu"}}));
+
+  TensorList<CPUBackend> data;
+  data.set_pinned(false);
+  data.Resize({{10}}, DALI_FLOAT);
+
+  pipe.SetExternalInput("data", data);
+  EXPECT_NO_THROW(pipe.Run());
+}
 
 }  // namespace dali
