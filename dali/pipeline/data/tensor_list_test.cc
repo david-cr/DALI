@@ -2082,5 +2082,301 @@ TEST(TensorList, ResizeOverheadPerf) {
   std::cout << format_time((end - start) / niter) << std::endl;
 }
 
+// ===== Coverage Improvement Tests =====
+
+// Test layout propagation in SetSample (lines 304-306)
+TEST(TensorListCoverageTest, SetSampleLayoutPropagation) {
+  // Lines 304-306: if (src.GetLayout().empty() && !GetLayout().empty())
+  TensorList<CPUBackend> target;
+  target.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  target.SetLayout("HW");  // Target has layout
+
+  TensorList<CPUBackend> src;
+  src.Resize(uniform_list_shape(1, {10, 20}), DALI_FLOAT);
+  // src has empty layout (default)
+
+  // SetSample should propagate target's layout to the sample
+  target.SetSample(0, src, 0);
+
+  // Verify layout was propagated
+  EXPECT_EQ(target.GetMeta(0).GetLayout(), "HW");
+}
+
+// Test layout propagation in SetSample with Tensor (lines 331-333)
+TEST(TensorListCoverageTest, SetSampleTensorLayoutPropagation) {
+  // Lines 331-333: if (owner.GetLayout().empty() && !GetLayout().empty())
+  TensorList<CPUBackend> target;
+  target.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  target.SetLayout("HW");
+
+  Tensor<CPUBackend> src;
+  src.Resize({10, 20}, DALI_FLOAT);
+  // src has empty layout
+
+  target.SetSample(0, src);
+
+  // Verify layout was propagated
+  EXPECT_EQ(target.GetMeta(0).GetLayout(), "HW");
+}
+
+// Test layout propagation in SetSample with shared_ptr (lines 360-362)
+TEST(TensorListCoverageTest, SetSampleSharedPtrLayoutPropagation) {
+  // Lines 360-362: if (layout.empty() && !GetLayout().empty())
+  TensorList<CPUBackend> target;
+  target.set_pinned(false);  // Match pinned status with the sample
+  target.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  target.SetLayout("HW");
+  target.MakeNoncontiguous();  // Required for SetSample with shared_ptr
+
+  std::vector<float> data(200, 1.0f);
+  auto ptr = std::shared_ptr<void>(data.data(), [](void*){});
+
+  // Call with empty layout, matching pinned status and device_id
+  target.SetSample(0, ptr, 200 * sizeof(float), false, TensorShape<>{10, 20},
+                   DALI_FLOAT, target.device_id(), AccessOrder::host(), TensorLayout());
+
+  // Verify layout was propagated
+  EXPECT_EQ(target.GetMeta(0).GetLayout(), "HW");
+}
+
+// Test layout propagation in CopySample from TensorList (lines 409-411)
+TEST(TensorListCoverageTest, CopySampleLayoutPropagation) {
+  // Lines 409-411: if (src.GetLayout().empty() && !GetLayout().empty())
+  TensorList<CPUBackend> target;
+  target.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  target.SetLayout("HW");
+
+  TensorList<CPUBackend> src;
+  src.Resize(uniform_list_shape(1, {10, 20}), DALI_FLOAT);
+  // src has empty layout
+
+  target.CopySample(0, src, 0);
+
+  // Verify layout was propagated
+  EXPECT_EQ(target.GetMeta(0).GetLayout(), "HW");
+}
+
+// Test layout propagation in CopySample from Tensor (lines 426-428)
+TEST(TensorListCoverageTest, CopySampleTensorLayoutPropagation) {
+  // Lines 426-428: if (src.GetLayout().empty() && !GetLayout().empty())
+  TensorList<CPUBackend> target;
+  target.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  target.SetLayout("HW");
+
+  Tensor<CPUBackend> src;
+  src.Resize({10, 20}, DALI_FLOAT);
+  // src has empty layout
+
+  target.CopySample(0, src);
+
+  // Verify layout was propagated
+  EXPECT_EQ(target.GetMeta(0).GetLayout(), "HW");
+}
+
+// Test move assignment to self (line 229)
+TEST(TensorListCoverageTest, MoveAssignmentToSelf) {
+  // Line 229: if (&other != this) - test the else branch
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(3, {10, 20}), DALI_FLOAT);
+
+  // Self-assignment should be safe
+  TensorList<CPUBackend> *ptr = &tl;
+  tl = std::move(*ptr);
+
+  // Should still be valid
+  EXPECT_EQ(tl.num_samples(), 3);
+}
+
+// Test SetSample with same tensor (lines 286-287)
+TEST(TensorListCoverageTest, SetSampleIdentityCheck) {
+  // Lines 286-287: if (&src.tensors_[src_sample_idx] == &tensors_[sample_idx])
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(3, {10, 20}), DALI_FLOAT);
+
+  // SetSample to itself should return early
+  tl.SetSample(0, tl, 0);
+
+  // Should complete without error
+  EXPECT_EQ(tl.num_samples(), 3);
+}
+
+// Test SetSample with shared_ptr on contiguous batch (line 348)
+TEST(TensorListCoverageTest, SetSampleSharedPtrRequiresNoncontiguous) {
+  // Line 348: DALI_ENFORCE(!IsContiguous())
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  // tl is contiguous by default
+
+  std::vector<float> data(200, 1.0f);
+  auto ptr = std::shared_ptr<void>(data.data(), [](void*){});
+
+  // Should throw because batch is contiguous
+  EXPECT_THROW(
+      tl.SetSample(0, ptr, 200 * sizeof(float), false, TensorShape<>{10, 20},
+                   DALI_FLOAT, -1, AccessOrder::host(), TensorLayout("HW")),
+      std::runtime_error);
+}
+
+// Test set_sample_dim on allocated batch (lines 434-436)
+TEST(TensorListCoverageTest, SetSampleDimOnAllocatedBatch) {
+  // Lines 434-436: DALI_ENFORCE(!has_data(), ...)
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);  // Allocates data
+
+  // Should throw because batch is already allocated
+  EXPECT_THROW(tl.set_sample_dim(3), std::runtime_error);
+}
+
+// Test SetSize with negative size (lines 633-634)
+TEST(TensorListCoverageTest, SetSizeNegative) {
+  // Lines 633-634: DALI_ENFORCE(new_size >= 0, ...)
+  TensorList<CPUBackend> tl;
+
+  // Should throw with negative size
+  EXPECT_THROW(tl.SetSize(-5), std::runtime_error);
+}
+
+// Test SetMeta with mismatched layout (lines 691-693)
+TEST(TensorListCoverageTest, SetMetaMismatchedLayout) {
+  // Lines 691-693: DALI_ENFORCE(GetLayout() == meta.GetLayout(), ...)
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  tl.SetLayout("HW");
+
+  DALIMeta meta;
+  meta.SetLayout("CHW");  // Different layout
+
+  // Should throw due to layout mismatch
+  EXPECT_THROW(tl.SetMeta(0, meta), std::runtime_error);
+}
+
+// Test VerifySampleShareCompatibility error paths (lines 255-274)
+TEST(TensorListCoverageTest, VerifySampleShareCompatibilityTypeMismatch) {
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+
+  Tensor<CPUBackend> src;
+  src.Resize({10, 20}, DALI_INT32);  // Different type
+
+  // Should throw due to type mismatch
+  EXPECT_THROW(tl.SetSample(0, src), std::runtime_error);
+}
+
+TEST(TensorListCoverageTest, VerifySampleShareCompatibilitySampleDimMismatch) {
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+
+  Tensor<CPUBackend> src;
+  src.Resize({10, 20, 3}, DALI_FLOAT);  // Different ndim
+
+  // Should throw due to sample dim mismatch
+  EXPECT_THROW(tl.SetSample(0, src), std::runtime_error);
+}
+
+TEST(TensorListCoverageTest, VerifySampleShareCompatibilityLayoutMismatch) {
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  tl.SetLayout("HW");
+
+  Tensor<CPUBackend> src;
+  src.Resize({10, 20}, DALI_FLOAT);
+  src.SetLayout("XY");  // Different non-empty layout
+
+  // Should throw due to layout mismatch
+  EXPECT_THROW(tl.SetSample(0, src), std::runtime_error);
+}
+
+TEST(TensorListCoverageTest, VerifySampleShareCompatibilityPinnedMismatch) {
+  TensorList<CPUBackend> tl;
+  tl.set_pinned(true);
+  tl.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+
+  Tensor<CPUBackend> src;
+  src.set_pinned(false);
+  src.Resize({10, 20}, DALI_FLOAT);
+
+  // Should throw due to pinned status mismatch
+  EXPECT_THROW(tl.SetSample(0, src), std::runtime_error);
+}
+
+// Test const operator[] bounds checking (line 534)
+TEST(TensorListCoverageTest, ConstOperatorBoundsCheck) {
+  // Line 534: DALI_ENFORCE(pos < static_cast<size_t>(curr_num_tensors_), ...)
+  const TensorList<CPUBackend> tl;
+  // tl is empty
+
+  // Should throw on out-of-bounds access
+  EXPECT_THROW(tl[0], std::runtime_error);
+}
+
+// Test VerifySampleCopyCompatibility volume mismatch for contiguous (lines 382-386)
+TEST(TensorListCoverageTest, VerifySampleCopyCompatibilityVolumeMismatch) {
+  // Lines 382-386: For contiguous batch, volumes must match
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);  // Contiguous by default
+
+  Tensor<CPUBackend> src;
+  src.Resize({5, 20}, DALI_FLOAT);  // Different volume
+
+  // Should throw due to volume mismatch in contiguous batch
+  EXPECT_THROW(tl.CopySample(0, src), std::runtime_error);
+}
+
+// Test AccessOrder edge case in SyncBefore (line 58)
+TEST(TensorListCoverageTest, SyncBeforeAccessOrderEdgeCase) {
+  // Line 58: dst_order ? dst_order : src_order
+  // Test the case where both dst and src orders exist, triggering the ternary
+  TensorList<CPUBackend> src, dst;
+  src.Resize(uniform_list_shape(2, {10}), DALI_FLOAT);
+  dst.Resize(uniform_list_shape(2, {10}), DALI_FLOAT);
+
+  // Both have host orders, but Copy will use dst_order
+  src.set_order(AccessOrder::host());
+  dst.set_order(AccessOrder::host());
+
+  // Copy should handle this case - dst_order takes precedence
+  dst.Copy(src);
+
+  EXPECT_EQ(dst.num_samples(), 2);
+  EXPECT_EQ(dst.order(), AccessOrder::host());
+}
+
+// GPU-specific tests
+TEST(TensorListCoverageTest, SetSampleGPULayoutPropagation) {
+  int device_count = 0;
+  cudaGetDeviceCount(&device_count);
+  if (device_count < 1) {
+    GTEST_SKIP() << "No GPU available";
+  }
+
+  TensorList<GPUBackend> target;
+  target.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  target.SetLayout("HW");
+
+  TensorList<GPUBackend> src;
+  src.Resize(uniform_list_shape(1, {10, 20}), DALI_FLOAT);
+
+  target.SetSample(0, src, 0);
+  EXPECT_EQ(target.GetMeta(0).GetLayout(), "HW");
+}
+
+TEST(TensorListCoverageTest, CopySampleGPULayoutPropagation) {
+  int device_count = 0;
+  cudaGetDeviceCount(&device_count);
+  if (device_count < 1) {
+    GTEST_SKIP() << "No GPU available";
+  }
+
+  TensorList<GPUBackend> target;
+  target.Resize(uniform_list_shape(2, {10, 20}), DALI_FLOAT);
+  target.SetLayout("HW");
+
+  TensorList<GPUBackend> src;
+  src.Resize(uniform_list_shape(1, {10, 20}), DALI_FLOAT);
+
+  target.CopySample(0, src, 0, AccessOrder(cudaStream_t(0)));
+  EXPECT_EQ(target.GetMeta(0).GetLayout(), "HW");
+}
+
 }  // namespace test
 }  // namespace dali
