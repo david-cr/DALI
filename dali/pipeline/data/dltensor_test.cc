@@ -917,4 +917,83 @@ TEST(DLMTensorPtr, GPU5DTensor) {
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 
+// ====================================================================================
+// Coverage tests for TYPE_SWITCH branches in ToDLType (lines 130-144)
+// ====================================================================================
+
+// Test unsupported DALI data type to cover the TYPE_SWITCH fallback error path
+// Covers line 144: DALI_FAIL for unsupported element types
+TEST(DLPackTest, ToDLTypeUnsupportedDALIType) {
+  // DALI_STRING is not supported by DLTensor
+  EXPECT_THROW(ToDLType(DALI_STRING), DALIException);
+}
+
+// Comprehensive test to ensure all TYPE_SWITCH branches are exercised
+// This covers lines 130-143: all constexpr if branches in TYPE_SWITCH
+TEST(DLPackTest, ToDLTypeComprehensiveBranchCoverage) {
+  // Test all floating point types (line 134: kDLFloat branch)
+  auto dl_f16 = ToDLType(DALI_FLOAT16);
+  EXPECT_EQ(dl_f16.code, kDLFloat);
+  EXPECT_EQ(dl_f16.bits, 16);
+  EXPECT_EQ(dl_f16.lanes, 1);
+
+  auto dl_f32 = ToDLType(DALI_FLOAT);
+  EXPECT_EQ(dl_f32.code, kDLFloat);
+  EXPECT_EQ(dl_f32.bits, 32);
+  EXPECT_EQ(dl_f32.lanes, 1);
+
+  auto dl_f64 = ToDLType(DALI_FLOAT64);
+  EXPECT_EQ(dl_f64.code, kDLFloat);
+  EXPECT_EQ(dl_f64.bits, 64);
+  EXPECT_EQ(dl_f64.lanes, 1);
+
+  // Test bool type (line 136: kDLBool branch)
+  auto dl_bool = ToDLType(DALI_BOOL);
+  EXPECT_EQ(dl_bool.code, kDLBool);
+  EXPECT_EQ(dl_bool.bits, 8);
+  EXPECT_EQ(dl_bool.lanes, 1);
+
+  // Test unsigned integer types (line 138: kDLUInt branch)
+  auto dl_u8 = ToDLType(DALI_UINT8);
+  EXPECT_EQ(dl_u8.code, kDLUInt);
+  EXPECT_EQ(dl_u8.bits, 8);
+  EXPECT_EQ(dl_u8.lanes, 1);
+
+  auto dl_u16 = ToDLType(DALI_UINT16);
+  EXPECT_EQ(dl_u16.code, kDLUInt);
+  EXPECT_EQ(dl_u16.bits, 16);
+  EXPECT_EQ(dl_u16.lanes, 1);
+
+  auto dl_u32 = ToDLType(DALI_UINT32);
+  EXPECT_EQ(dl_u32.code, kDLUInt);
+  EXPECT_EQ(dl_u32.bits, 32);
+  EXPECT_EQ(dl_u32.lanes, 1);
+
+  auto dl_u64 = ToDLType(DALI_UINT64);
+  EXPECT_EQ(dl_u64.code, kDLUInt);
+  EXPECT_EQ(dl_u64.bits, 64);
+  EXPECT_EQ(dl_u64.lanes, 1);
+
+  // Test signed integer types (line 140: kDLInt branch)
+  auto dl_i8 = ToDLType(DALI_INT8);
+  EXPECT_EQ(dl_i8.code, kDLInt);
+  EXPECT_EQ(dl_i8.bits, 8);
+  EXPECT_EQ(dl_i8.lanes, 1);
+
+  auto dl_i16 = ToDLType(DALI_INT16);
+  EXPECT_EQ(dl_i16.code, kDLInt);
+  EXPECT_EQ(dl_i16.bits, 16);
+  EXPECT_EQ(dl_i16.lanes, 1);
+
+  auto dl_i32 = ToDLType(DALI_INT32);
+  EXPECT_EQ(dl_i32.code, kDLInt);
+  EXPECT_EQ(dl_i32.bits, 32);
+  EXPECT_EQ(dl_i32.lanes, 1);
+
+  auto dl_i64 = ToDLType(DALI_INT64);
+  EXPECT_EQ(dl_i64.code, kDLInt);
+  EXPECT_EQ(dl_i64.bits, 64);
+  EXPECT_EQ(dl_i64.lanes, 1);
+}
+
 }  // namespace dali
