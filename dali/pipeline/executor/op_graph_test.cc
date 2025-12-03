@@ -1554,4 +1554,238 @@ TEST_F(OpGraphTest, TestCPUOpWithArgumentInput) {
   }
 }
 
+// ====================================================================================
+// STEP 1: Tests for swap operations with consumers
+// Targets uncovered lines in SwapTensorNodes (248-255) and SwapOpNodes (330-331, 338-339)
+// ====================================================================================
+
+// Test RemoveOp that triggers SwapOpNodes with children present
+// This covers lines 330-331, 338-339 in SwapOpNodes lambdas
+TEST_F(OpGraphTest, TestSwapOpNodesWithChildrenPresent) {
+  OpGraph graph;
+
+  // Build a graph: Op0 produces 3 outputs, Op1-Op3 consume them, Op4-Op6 consume from Op1-Op3
+  // Structure:
+  //     Op0
+  //    /  |  \
+  //  Op1 Op2 Op3
+  //   |   |   |
+  //  Op4 Op5 Op6
+  //
+  // When we remove Op5, it will swap with Op6, and Op2 has a child (Op5), so the
+  // children loop in SwapOpNodes will execute
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 3)
+          .AddOutput("data_0", StorageDevice::CPU)
+          .AddOutput("data_1", StorageDevice::CPU)
+          .AddOutput("data_2", StorageDevice::CPU)), "op0");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 1)
+          .AddInput("data_0", StorageDevice::CPU)
+          .AddOutput("out_1", StorageDevice::CPU)), "op1");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 1)
+          .AddInput("data_1", StorageDevice::CPU)
+          .AddOutput("out_2", StorageDevice::CPU)), "op2");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 1)
+          .AddInput("data_2", StorageDevice::CPU)
+          .AddOutput("out_3", StorageDevice::CPU)), "op3");
+
+  // Add second level - these create children relationships
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 1)
+          .AddInput("out_1", StorageDevice::CPU)
+          .AddOutput("final_1", StorageDevice::CPU)), "op4");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 1)
+          .AddInput("out_2", StorageDevice::CPU)
+          .AddOutput("final_2", StorageDevice::CPU)), "op5");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 1)
+          .AddInput("out_3", StorageDevice::CPU)
+          .AddOutput("final_3", StorageDevice::CPU)), "op6");
+
+  ASSERT_EQ(graph.NumOp(), 7);
+
+  // Verify Op2 has a child before removal
+  ASSERT_EQ(graph.Node(2).children.size(), 1);
+  ASSERT_TRUE(graph.Node(2).children.count(5) > 0);
+
+  // Remove leaf nodes from the end, which will trigger swapping
+  // Removing Op6 (last node) - no swap needed
+  graph.RemoveOp(6);
+  ASSERT_EQ(graph.NumOp(), 6);
+
+  // Removing Op5 will now trigger SwapOpNodes between Op5 and the new last node
+  // At this point Op2 still has Op5 as a child, so the children loop executes
+  graph.RemoveOp(5);
+  ASSERT_EQ(graph.NumOp(), 5);
+
+  // Continue removing to trigger more swaps
+  graph.RemoveOp(4);
+  ASSERT_EQ(graph.NumOp(), 4);
+}
+
+// Test RemoveTensorNode that triggers SwapTensorNodes with consumers present
+// This covers lines 248-250, 253-255 in SwapTensorNodes
+TEST_F(OpGraphTest, TestSwapTensorNodesWithConsumersPresent) {
+  OpGraph graph;
+
+  // Build a graph where one tensor has multiple consumers
+  // Structure:
+  //     Op0 (produces T0, T1, T2)
+  //     T0 -> Op1
+  //     T0 -> Op2
+  //     T1 -> Op3
+  //     T2 -> Op4
+  //
+  // When we remove Op4, its output tensor will be removed, triggering tensor swaps
+  // Since T0 has consumers, the consumer update loops will execute
+  // DummyOp has 2 default outputs, so we need to specify both or use num_outputs
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddOutput("shared", StorageDevice::CPU)
+          .AddOutput("data_1", StorageDevice::CPU)), "op0");
+
+  // Two consumers of the same tensor (T0)
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 1)
+          .AddInput("shared", StorageDevice::CPU)
+          .AddOutput("out_1", StorageDevice::CPU)), "op1");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 1)
+          .AddInput("shared", StorageDevice::CPU)
+          .AddOutput("out_2", StorageDevice::CPU)), "op2");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("DummyOp")
+          .AddArg("device", "cpu")
+          .AddArg("num_outputs", 1)
+          .AddInput("data_1", StorageDevice::CPU)
+          .AddOutput("out_3", StorageDevice::CPU)), "op3");
+
+  ASSERT_EQ(graph.NumOp(), 4);
+  ASSERT_EQ(graph.NumTensor(), 5);  // 2 from op0, 3 outputs from op1-op3
+
+  // Verify shared tensor has multiple consumers
+  auto shared_tensor_id = graph.TensorId("shared_cpu");
+  ASSERT_TRUE(shared_tensor_id.has_value());
+  ASSERT_EQ(graph.Tensor(*shared_tensor_id).consumers.size(), 2);
+
+  // Remove ops in reverse topological order, triggering tensor swaps
+  // Each removal will swap tensors, and the shared tensor with consumers will
+  // trigger the consumer update loops in SwapTensorNodes
+  graph.RemoveOp(3);
+  ASSERT_EQ(graph.NumTensor(), 4);
+
+  graph.RemoveOp(2);
+  ASSERT_EQ(graph.NumTensor(), 3);
+
+  // The shared tensor should still have one consumer
+  shared_tensor_id = graph.TensorId("shared_cpu");
+  ASSERT_TRUE(shared_tensor_id.has_value());
+  ASSERT_EQ(graph.Tensor(*shared_tensor_id).consumers.size(), 1);
+}
+
+// ====================================================================================
+// STEP 2: Test for invalid device error path
+// Targets lines 149-152 in AddOp (default case in device type switch)
+// ====================================================================================
+
+// Test invalid device type - covers the default case in the switch statement
+TEST_F(OpGraphTest, TestInvalidDeviceString) {
+  OpGraph graph;
+
+  // Try to add operator with an invalid device string
+  // ParseOpType throws std::invalid_argument before reaching the switch statement
+  ASSERT_THROW(
+      graph.AddOp(this->PrepareSpec(
+              OpSpec("ExternalSource")
+              .AddArg("device", "invalid_device_type")
+              .AddOutput("data", StorageDevice::CPU)), ""),
+      std::invalid_argument);
+}
+
+// Test another invalid device to ensure robustness
+TEST_F(OpGraphTest, TestAnotherInvalidDevice) {
+  OpGraph graph;
+
+  // Test with various invalid device strings
+  ASSERT_THROW(
+      graph.AddOp(this->PrepareSpec(
+              OpSpec("ExternalSource")
+              .AddArg("device", "tpu")  // Not a valid DALI device
+              .AddOutput("data", StorageDevice::CPU)), ""),
+      std::invalid_argument);
+
+  ASSERT_THROW(
+      graph.AddOp(this->PrepareSpec(
+              OpSpec("ExternalSource")
+              .AddArg("device", "")  // Empty string
+              .AddOutput("data", StorageDevice::CPU)), ""),
+      std::invalid_argument);
+
+  ASSERT_THROW(
+      graph.AddOp(this->PrepareSpec(
+              OpSpec("ExternalSource")
+              .AddArg("device", "GPU")  // Wrong case
+              .AddOutput("data", StorageDevice::CPU)), ""),
+      std::invalid_argument);
+}
+
+// ====================================================================================
+// STEP 3: Analysis of AllOutputsGPU function
+// ====================================================================================
+// FINDING: AllOutputsGPU (lines 46-50 in lowered_graph.cc) is DEAD CODE
+//
+// Evidence:
+// 1. The function is defined in the anonymous namespace but never called
+// 2. Similar functions AllInputsCPU and AllOutputsCPU ARE used in AddOp validation:
+//    - AllInputsCPU: Used for CPU ops (line 137) and MIXED ops (line 146)
+//    - AllOutputsCPU: Used for CPU ops (line 138)
+//    - AllOutputsGPU: NEVER USED
+//
+// 3. Validation logic in AddOp (lines 134-153):
+//    - CPU ops: Enforce all inputs CPU AND all outputs CPU
+//    - GPU ops: No validation (can have any inputs/outputs)
+//    - MIXED ops: Enforce all inputs CPU (outputs can be GPU, no need to check)
+//
+// 4. AllOutputsGPU would theoretically be used if:
+//    - GPU ops needed to enforce "all outputs must be GPU" (they don't)
+//    - Or MIXED ops needed to verify "all outputs are GPU" (they don't)
+//
+// RECOMMENDATION: Remove AllOutputsGPU function as it's unused and adds maintenance
+// burden. If future requirements need output validation for GPU/MIXED ops, it can
+// be added back when needed.
+//
+// NOTE: This test file documents the finding but does not remove the function.
+// The function removal should be done as a separate cleanup task with proper review.
+// ====================================================================================
+
 }  // namespace dali
