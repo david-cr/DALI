@@ -16,7 +16,9 @@
 #include <stdexcept>
 
 #include "dali/pipeline/executor/lowered_graph.h"
+#include "dali/pipeline/executor/op_graph_storage.h"
 #include "dali/pipeline/executor/op_graph_verifier.h"
+#include "dali/pipeline/util/event_pool.h"
 #include "dali/test/dali_test.h"
 
 namespace dali {
@@ -1787,5 +1789,213 @@ TEST_F(OpGraphTest, TestAnotherInvalidDevice) {
 // NOTE: This test file documents the finding but does not remove the function.
 // The function removal should be done as a separate cleanup task with proper review.
 // ====================================================================================
+
+// ====================================================================================
+// Tests for op_graph_storage.cc functions
+// ====================================================================================
+
+// Test CreateBackingStorageForTensorNodes - basic functionality
+// Covers lines 21-36 in op_graph_storage.cc
+TEST_F(OpGraphTest, CreateBackingStorageForTensorNodes) {
+  OpGraph graph;
+
+  // Create a simple graph with 2 tensors
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("data1", StorageDevice::CPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("Copy")
+          .AddArg("device", "cpu")
+          .AddInput("data1", StorageDevice::CPU)
+          .AddOutput("data2", StorageDevice::CPU)), "");
+
+  int batch_size = 4;
+  std::vector<int> queue_sizes(graph.NumTensor(), 2);
+
+  // Call CreateBackingStorageForTensorNodes
+  auto storage = CreateBackingStorageForTensorNodes(graph, batch_size, queue_sizes);
+
+  // Verify the result
+  EXPECT_EQ(storage.size(), graph.NumTensor());
+  EXPECT_EQ(storage.size(), 2);
+}
+
+// Test CreateBackingStorageForTensorNodes with mismatched queue sizes
+// Covers line 23-24: DALI_ENFORCE validation error path
+TEST_F(OpGraphTest, CreateBackingStorageForTensorNodesMismatchedSize) {
+  OpGraph graph;
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("data", StorageDevice::CPU)), "");
+
+  int batch_size = 4;
+  std::vector<int> queue_sizes;  // Empty - size mismatch
+
+  // Should throw due to size mismatch
+  EXPECT_THROW(
+      CreateBackingStorageForTensorNodes(graph, batch_size, queue_sizes),
+      std::runtime_error);
+}
+
+// Test CreateBackingStorageForTensorNodes with GPU tensors
+// Covers lines 29-34 with GPU storage device
+TEST_F(OpGraphTest, CreateBackingStorageForTensorNodesGPU) {
+  OpGraph graph;
+
+  // Create a graph with GPU tensors
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "gpu")
+          .AddOutput("gpu_data", StorageDevice::GPU)), "");
+
+  int batch_size = 8;
+  std::vector<int> queue_sizes(graph.NumTensor(), 3);
+
+  // Call CreateBackingStorageForTensorNodes with GPU tensors
+  auto storage = CreateBackingStorageForTensorNodes(graph, batch_size, queue_sizes);
+
+  EXPECT_EQ(storage.size(), graph.NumTensor());
+  EXPECT_EQ(storage.size(), 1);
+}
+
+// Test CreateBackingStorageForTensorNodes with mixed CPU and GPU tensors
+// Covers lines 29-34 loop with different storage devices
+TEST_F(OpGraphTest, CreateBackingStorageForTensorNodesMixed) {
+  OpGraph graph;
+
+  // Create CPU and GPU tensors
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("cpu_data", StorageDevice::CPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "gpu")
+          .AddOutput("gpu_data", StorageDevice::GPU)), "");
+
+  int batch_size = 16;
+  std::vector<int> queue_sizes(graph.NumTensor(), 4);
+
+  auto storage = CreateBackingStorageForTensorNodes(graph, batch_size, queue_sizes);
+
+  EXPECT_EQ(storage.size(), graph.NumTensor());
+  EXPECT_EQ(storage.size(), 2);
+}
+
+// Test CreateEventsForMixedOps - basic functionality
+// Covers lines 38-49 in op_graph_storage.cc
+TEST_F(OpGraphTest, CreateEventsForMixedOps) {
+  int device_count = 0;
+  CUDA_CALL(cudaGetDeviceCount(&device_count));
+  if (device_count < 1) {
+    GTEST_SKIP() << "At least 1 GPU required";
+  }
+
+  OpGraph graph;
+
+  // Create a CPU input source
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("cpu_data", StorageDevice::CPU)), "");
+
+  // Create a MIXED op (CPU input, GPU output)
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("MakeContiguous")
+          .AddArg("device", "mixed")
+          .AddInput("cpu_data", StorageDevice::CPU)
+          .AddOutput("gpu_data", StorageDevice::GPU)), "");
+
+  int mixed_queue_depth = 3;
+  EventPool event_pool;
+
+  // Call CreateEventsForMixedOps
+  auto events = CreateEventsForMixedOps(event_pool, graph, mixed_queue_depth);
+
+  // Verify the result
+  EXPECT_EQ(events.size(), graph.NumOp(OpType::MIXED));
+  EXPECT_EQ(events.size(), 1);
+  EXPECT_EQ(events[0].size(), mixed_queue_depth);
+}
+
+// Test CreateEventsForMixedOps with no mixed ops
+// Covers lines 40-41 with NumOp(OpType::MIXED) == 0
+TEST_F(OpGraphTest, CreateEventsForMixedOpsEmpty) {
+  int device_count = 0;
+  CUDA_CALL(cudaGetDeviceCount(&device_count));
+  if (device_count < 1) {
+    GTEST_SKIP() << "At least 1 GPU required";
+  }
+
+  OpGraph graph;
+
+  // Create only CPU ops (no MIXED ops)
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("data", StorageDevice::CPU)), "");
+
+  int mixed_queue_depth = 2;
+  EventPool event_pool;
+
+  // Call CreateEventsForMixedOps with no mixed ops
+  auto events = CreateEventsForMixedOps(event_pool, graph, mixed_queue_depth);
+
+  // Should return empty vector
+  EXPECT_EQ(events.size(), 0);
+}
+
+// Test CreateEventsForMixedOps with multiple mixed ops
+// Covers lines 42-47: nested loops with multiple ops
+TEST_F(OpGraphTest, CreateEventsForMixedOpsMultiple) {
+  int device_count = 0;
+  CUDA_CALL(cudaGetDeviceCount(&device_count));
+  if (device_count < 1) {
+    GTEST_SKIP() << "At least 1 GPU required";
+  }
+
+  OpGraph graph;
+
+  // Create CPU input sources
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("cpu_data1", StorageDevice::CPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("cpu_data2", StorageDevice::CPU)), "");
+
+  // Create multiple MIXED ops
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("MakeContiguous")
+          .AddArg("device", "mixed")
+          .AddInput("cpu_data1", StorageDevice::CPU)
+          .AddOutput("gpu_data1", StorageDevice::GPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("MakeContiguous")
+          .AddArg("device", "mixed")
+          .AddInput("cpu_data2", StorageDevice::CPU)
+          .AddOutput("gpu_data2", StorageDevice::GPU)), "");
+
+  int mixed_queue_depth = 4;
+  EventPool event_pool;
+
+  // Call CreateEventsForMixedOps with multiple mixed ops
+  auto events = CreateEventsForMixedOps(event_pool, graph, mixed_queue_depth);
+
+  // Verify the result
+  EXPECT_EQ(events.size(), graph.NumOp(OpType::MIXED));
+  EXPECT_EQ(events.size(), 2);
+  EXPECT_EQ(events[0].size(), mixed_queue_depth);
+  EXPECT_EQ(events[1].size(), mixed_queue_depth);
+}
 
 }  // namespace dali
