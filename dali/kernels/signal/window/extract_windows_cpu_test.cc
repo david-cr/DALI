@@ -194,6 +194,468 @@ INSTANTIATE_TEST_SUITE_P(ExtractWindowsCpuTest, ExtractWindowsCpuTest, testing::
     testing::Values(0, 2, 4),  // window offsets
     testing::Values(Padding::None, Padding::Zero, Padding::Reflect)));  // reflect padding
 
+// ============================================================================
+// Additional tests for improved code coverage
+// ============================================================================
+
+// Test 1D input with vertical=false (Dims=1, horizontal layout)
+TEST(ExtractWindowsCpu1DTest, Horizontal) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(20);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{20};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 2;
+  args.axis = 0;
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 2> out_view(out.data(), out_shape.to_static<2>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  // Verify output shape
+  EXPECT_EQ(out_shape[0], 9);  // nwindows = (20 - 4) / 2 + 1 = 9
+  EXPECT_EQ(out_shape[1], 4);  // window_length
+}
+
+// Test 1D input with vertical=true (Dims=1, vertical layout)
+TEST(ExtractWindowsCpu1DTest, Vertical) {
+  ExtractWindowsCpu<float, float, 1, true> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(20);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{20};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 2;
+  args.axis = 0;
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 2> out_view(out.data(), out_shape.to_static<2>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  // Verify output shape (vertical: window_length first, then nwindows)
+  EXPECT_EQ(out_shape[0], 4);  // window_length
+  EXPECT_EQ(out_shape[1], 9);  // nwindows
+}
+
+// Test with window_length <= 0 (triggers default to 1) - line 48
+TEST(ExtractWindowsCpuEdgeCases, WindowLengthZero) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  // Window function with 1 element (matches the default window_length=1)
+  std::vector<float> window_fn_data = {1.0f};
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {1});
+
+  ExtractWindowsArgs args;
+  args.window_length = 0;  // Should default to 1
+  args.window_step = 1;
+  args.axis = 0;
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 2> out_view(out.data(), out_shape.to_static<2>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  // With window_length=1, step=1, input=10: nwindows = 10
+  EXPECT_EQ(out_shape[0], 10);  // nwindows
+  EXPECT_EQ(out_shape[1], 1);   // window_length (defaulted to 1)
+}
+
+// Test with window_step <= 0 (triggers default to 1) - line 49
+TEST(ExtractWindowsCpuEdgeCases, WindowStepZero) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 0;  // Should default to 1
+  args.axis = 0;
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 2> out_view(out.data(), out_shape.to_static<2>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  // With window_length=4, step=1 (default), input=10: nwindows = (10 - 4) / 1 + 1 = 7
+  EXPECT_EQ(out_shape[0], 7);  // nwindows
+  EXPECT_EQ(out_shape[1], 4);  // window_length
+}
+
+// Test with axis < 0 (triggers default to last axis) - line 65
+TEST(ExtractWindowsCpuEdgeCases, NegativeAxis) {
+  ExtractWindowsCpu<float, float, 2, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(24);  // 2 x 12
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<2> in_shape{2, 12};
+  OutTensorCPU<float, 2> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 2;
+  args.axis = -1;  // Should default to InputDims - 1 = 1
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 3> out_view(out.data(), out_shape.to_static<3>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  // Axis defaults to 1 (last axis)
+  // nwindows = (12 - 4) / 2 + 1 = 5
+  EXPECT_EQ(out_shape[0], 2);  // first dim unchanged
+  EXPECT_EQ(out_shape[1], 5);  // nwindows
+  EXPECT_EQ(out_shape[2], 4);  // window_length
+}
+
+// Test with window_center < 0 and padding != None (auto-center) - line 52
+TEST(ExtractWindowsCpuEdgeCases, AutoCenterWithPadding) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(20);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{20};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 2;
+  args.axis = 0;
+  args.window_center = -1;  // Auto-center: window_length / 2 = 2
+  args.padding = Padding::Zero;  // Padding enabled
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 2> out_view(out.data(), out_shape.to_static<2>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  // With padding, nwindows = n / step + 1 = 20 / 2 + 1 = 11
+  EXPECT_EQ(out_shape[0], 11);  // nwindows
+  EXPECT_EQ(out_shape[1], 4);   // window_length
+}
+
+// Test with explicit window_center and padding - line 52 (false branch)
+TEST(ExtractWindowsCpuEdgeCases, ExplicitCenterWithPadding) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(20);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{20};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 2;
+  args.axis = 0;
+  args.window_center = 1;  // Explicit center offset
+  args.padding = Padding::Reflect;
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 2> out_view(out.data(), out_shape.to_static<2>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  // With padding, nwindows = n / step + 1 = 20 / 2 + 1 = 11
+  EXPECT_EQ(out_shape[0], 11);
+  EXPECT_EQ(out_shape[1], 4);
+}
+
+// ============================================================================
+// Error path tests (DALI_ENFORCE)
+// ============================================================================
+
+// Test error: empty window function (line 60)
+TEST(ExtractWindowsCpuErrors, EmptyWindowFunction) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(10);
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  // Empty window function
+  std::vector<float> window_fn_data;
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {0});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 2;
+  args.axis = 0;
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  EXPECT_THROW(kernel.Setup(ctx, in_view, window_fn_view, args), DALIException);
+}
+
+// Test error: window function larger than window length (line 61)
+TEST(ExtractWindowsCpuErrors, WindowFunctionTooLarge) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(10);
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  // Window function larger than window_length
+  std::vector<float> window_fn_data(8);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {8});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;  // Smaller than window function
+  args.window_step = 2;
+  args.axis = 0;
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  EXPECT_THROW(kernel.Setup(ctx, in_view, window_fn_view, args), DALIException);
+}
+
+// Test error: window center offset out of range (line 56)
+TEST(ExtractWindowsCpuErrors, WindowCenterOutOfRange) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(10);
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 2;
+  args.axis = 0;
+  args.window_center = 10;  // > window_length, invalid
+  args.padding = Padding::Zero;  // Padding needed to use window_center
+
+  EXPECT_THROW(kernel.Setup(ctx, in_view, window_fn_view, args), DALIException);
+}
+
+// Test error: invalid axis (line 66)
+TEST(ExtractWindowsCpuErrors, InvalidAxis) {
+  ExtractWindowsCpu<float, float, 2, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(24);
+  TensorShape<2> in_shape{2, 12};
+  OutTensorCPU<float, 2> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 2;
+  args.axis = 5;  // Invalid: >= InputDims (2)
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  EXPECT_THROW(kernel.Setup(ctx, in_view, window_fn_view, args), DALIException);
+}
+
+// Test with axis = 0 (first dimension, not last)
+TEST(ExtractWindowsCpuEdgeCases, AxisZero) {
+  ExtractWindowsCpu<float, float, 2, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(24);  // 12 x 2
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<2> in_shape{12, 2};
+  OutTensorCPU<float, 2> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = 2;
+  args.axis = 0;  // Extract windows along first axis
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 3> out_view(out.data(), out_shape.to_static<3>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  // Axis 0: nwindows = (12 - 4) / 2 + 1 = 5
+  EXPECT_EQ(out_shape[0], 5);  // nwindows (horizontal layout)
+  EXPECT_EQ(out_shape[1], 4);  // window_length
+  EXPECT_EQ(out_shape[2], 2);  // second dim unchanged
+}
+
+// Test with negative window_length (triggers default)
+TEST(ExtractWindowsCpuEdgeCases, NegativeWindowLength) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data = {1.0f};
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {1});
+
+  ExtractWindowsArgs args;
+  args.window_length = -5;  // Negative, should default to 1
+  args.window_step = 1;
+  args.axis = 0;
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 2> out_view(out.data(), out_shape.to_static<2>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  EXPECT_EQ(out_shape[0], 10);  // nwindows
+  EXPECT_EQ(out_shape[1], 1);   // window_length defaulted to 1
+}
+
+// Test with negative window_step (triggers default)
+TEST(ExtractWindowsCpuEdgeCases, NegativeWindowStep) {
+  ExtractWindowsCpu<float, float, 1, false> kernel;
+  KernelContext ctx;
+
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  std::vector<float> window_fn_data(4);
+  HammingWindow(make_span(window_fn_data));
+  OutTensorCPU<float, 1> window_fn_view(window_fn_data.data(), {4});
+
+  ExtractWindowsArgs args;
+  args.window_length = 4;
+  args.window_step = -3;  // Negative, should default to 1
+  args.axis = 0;
+  args.window_center = -1;
+  args.padding = Padding::None;
+
+  auto reqs = kernel.Setup(ctx, in_view, window_fn_view, args);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  std::vector<float> out(volume(out_shape));
+  OutTensorCPU<float, 2> out_view(out.data(), out_shape.to_static<2>());
+
+  kernel.Run(ctx, out_view, in_view, window_fn_view, args);
+
+  // step defaults to 1: nwindows = (10 - 4) / 1 + 1 = 7
+  EXPECT_EQ(out_shape[0], 7);
+  EXPECT_EQ(out_shape[1], 4);
+}
+
 }  // namespace test
 }  // namespace window
 }  // namespace signal
