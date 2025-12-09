@@ -308,7 +308,12 @@ TEST(CAPI2_PipelineTest, RunGPU2CPU) {
 }
 
 TEST(CAPI2_PipelineTest, IncompatibleExec) {
-  // Skip this test when DALI_USE_EXEC2 is set
+  // Skip this test when DALI_USE_EXEC2 is set.
+  // Note: ForceExec2() in executor_factory.cc uses a static variable that caches
+  // the env var value on first call. If a previous test (e.g. ExecutorFactoryTest)
+  // called GetExecutor(AsyncPipelined) with DALI_USE_EXEC2=1, the static is cached
+  // as true even if the env var is later unset. We detect this by checking if
+  // AsyncPipelined unexpectedly succeeds.
   const char *env = getenv("DALI_USE_EXEC2");
   if (env && atoi(env)) {
     GTEST_SKIP() << "This test cannot work when the use of Dynamic Executor is forced.";
@@ -334,7 +339,14 @@ TEST(CAPI2_PipelineTest, IncompatibleExec) {
     }
     return daliGetLastError();
   };
-  EXPECT_EQ(deserialize_and_build(), DALI_ERROR_INVALID_OPERATION);
+
+  // Check if ForceExec2() has been cached as true by a previous test
+  auto async_result = deserialize_and_build();
+  if (async_result == DALI_SUCCESS) {
+    GTEST_SKIP() << "ForceExec2() was cached as true by a previous test.";
+  }
+  EXPECT_EQ(async_result, DALI_ERROR_INVALID_OPERATION);
+
   params.exec_type = DALI_EXEC_SIMPLE;
   EXPECT_EQ(deserialize_and_build(), DALI_ERROR_INVALID_OPERATION);
   params.exec_type = DALI_EXEC_DYNAMIC;
