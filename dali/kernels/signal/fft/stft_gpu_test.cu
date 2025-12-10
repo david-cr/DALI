@@ -291,6 +291,94 @@ TYPED_TEST(StftGPUTest, TestBatched_DifferentWindowLenAndNfft) {
   this->TestBatched(args);
 }
 
+// Test error path: StftGPU requires FFT_SPECTRUM_COMPLEX
+TEST(StftGPUErrors, InvalidSpectrumType) {
+  StftGPU stft;
+  TensorListShape<1> lengths = {{ 100, 200 }};
+  StftArgs args;
+  args.axis = 0;
+  args.window_length = 64;
+  args.window_center = 32;
+  args.window_step = 32;
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  // StftGPU should only accept FFT_SPECTRUM_COMPLEX
+  args.spectrum_type = FFT_SPECTRUM_MAGNITUDE;
+  EXPECT_THROW(stft.Setup(ctx, lengths, args), DALIException);
+
+  args.spectrum_type = FFT_SPECTRUM_POWER;
+  EXPECT_THROW(stft.Setup(ctx, lengths, args), DALIException);
+}
+
+// Test error path: SpectrogramGPU requires non-complex spectrum type
+TEST(SpectrogramGPUErrors, InvalidSpectrumType) {
+  SpectrogramGPU spectrogram;
+  TensorListShape<1> lengths = {{ 100, 200 }};
+  StftArgs args;
+  args.axis = 0;
+  args.window_length = 64;
+  args.window_center = 32;
+  args.window_step = 32;
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  // SpectrogramGPU should NOT accept FFT_SPECTRUM_COMPLEX
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  EXPECT_THROW(spectrogram.Setup(ctx, lengths, args), DALIException);
+}
+
+// Test impl_ caching - calling Setup multiple times on same kernel
+TEST(StftGPU, SetupMultipleCalls) {
+  StftGPU stft;
+  TensorListShape<1> lengths = {{ 100, 200 }};
+  StftArgs args;
+  args.axis = 0;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.window_length = 64;
+  args.window_center = 32;
+  args.window_step = 32;
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  // First call creates impl_
+  KernelRequirements req1 = stft.Setup(ctx, lengths, args);
+  ASSERT_EQ(req1.output_shapes.size(), 1u);
+
+  // Second call should reuse impl_ (covers !impl_ == false branch)
+  TensorListShape<1> lengths2 = {{ 150, 250, 300 }};
+  KernelRequirements req2 = stft.Setup(ctx, lengths2, args);
+  ASSERT_EQ(req2.output_shapes.size(), 1u);
+  ASSERT_EQ(req2.output_shapes[0].num_samples(), 3);
+}
+
+// Test impl_ caching for SpectrogramGPU
+TEST(SpectrogramGPU, SetupMultipleCalls) {
+  SpectrogramGPU spectrogram;
+  TensorListShape<1> lengths = {{ 100, 200 }};
+  StftArgs args;
+  args.axis = 0;
+  args.spectrum_type = FFT_SPECTRUM_MAGNITUDE;
+  args.window_length = 64;
+  args.window_center = 32;
+  args.window_step = 32;
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  // First call creates impl_
+  KernelRequirements req1 = spectrogram.Setup(ctx, lengths, args);
+  ASSERT_EQ(req1.output_shapes.size(), 1u);
+
+  // Second call should reuse impl_ (covers !impl_ == false branch)
+  TensorListShape<1> lengths2 = {{ 150, 250, 300 }};
+  KernelRequirements req2 = spectrogram.Setup(ctx, lengths2, args);
+  ASSERT_EQ(req2.output_shapes.size(), 1u);
+  ASSERT_EQ(req2.output_shapes[0].num_samples(), 3);
+}
 
 }  // namespace fft
 }  // namespace signal
