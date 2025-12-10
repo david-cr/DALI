@@ -427,7 +427,396 @@ INSTANTIATE_TEST_SUITE_P(ComplexFft1DCpuOtherLayoutTest, ComplexFft1DCpuOtherLay
     testing::Values(std::array<int64_t, 3>{6, 8, 4}),
     testing::Values(0, 1, 2)));
 
+// ============================================================================
+// Additional tests for improved code coverage
+// ============================================================================
 
+// Test with negative transform_axis (defaults to last axis) - line 69
+TEST(Fft1DCpuEdgeCases, NegativeTransformAxis) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 2;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = -1;  // Should default to Dims-1 = 1
+  args.nfft = 8;
+
+  std::vector<float> data(24);  // 3 x 8
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<2> in_shape{3, 8};
+  InTensorCPU<float, 2> in_view(data.data(), in_shape);
+
+  auto reqs = kernel.Setup(ctx, in_view, args);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  auto out_shape = reqs.output_shapes[0][0];
+  // Transform along axis 1 (last axis): output shape[1] = nfft/2+1 = 5
+  EXPECT_EQ(out_shape[0], 3);
+  EXPECT_EQ(out_shape[1], 5);  // 8/2+1 = 5
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 2> out_view(out_data.data(), out_shape.to_static<2>());
+  kernel.Run(ctx, out_view, in_view, args);
+}
+
+// Test with nfft > n (zero padding) - line 110
+TEST(Fft1DCpuEdgeCases, NfftLargerThanN) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = 0;
+  args.nfft = 64;  // Larger than input size (16)
+
+  std::vector<float> data(16);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{16};
+  InTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  auto reqs = kernel.Setup(ctx, in_view, args);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  auto out_shape = reqs.output_shapes[0][0];
+  EXPECT_EQ(out_shape[0], 33);  // 64/2+1 = 33
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args);
+}
+
+// Test plan caching - same nfft (line 82, false branch)
+TEST(Fft1DCpuEdgeCases, PlanCachingSameNfft) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = 0;
+  args.nfft = 32;
+
+  std::vector<float> data1(32);
+  for (size_t i = 0; i < data1.size(); i++) {
+    data1[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{32};
+  InTensorCPU<float, 1> in_view1(data1.data(), in_shape);
+
+  // First call - creates plan
+  auto reqs1 = kernel.Setup(ctx, in_view1, args);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  std::vector<OutputType> out_data1(volume(reqs1.output_shapes[0][0]));
+  OutTensorCPU<OutputType, 1> out_view1(out_data1.data(),
+      reqs1.output_shapes[0][0].to_static<1>());
+  kernel.Run(ctx, out_view1, in_view1, args);
+
+  // Second call with same nfft - should reuse plan
+  std::vector<float> data2(32);
+  for (size_t i = 0; i < data2.size(); i++) {
+    data2[i] = static_cast<float>(i * 2);
+  }
+  InTensorCPU<float, 1> in_view2(data2.data(), in_shape);
+
+  auto reqs2 = kernel.Setup(ctx, in_view2, args);
+  EXPECT_EQ(reqs1.output_shapes[0][0], reqs2.output_shapes[0][0]);
+
+  std::vector<OutputType> out_data2(volume(reqs2.output_shapes[0][0]));
+  OutTensorCPU<OutputType, 1> out_view2(out_data2.data(),
+      reqs2.output_shapes[0][0].to_static<1>());
+  kernel.Run(ctx, out_view2, in_view2, args);
+}
+
+// Test plan caching - different nfft (line 82, true branch)
+TEST(Fft1DCpuEdgeCases, PlanCachingDifferentNfft) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = 0;
+
+  std::vector<float> data(64);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  // First call with nfft=32
+  args.nfft = 32;
+  TensorShape<1> in_shape1{32};
+  InTensorCPU<float, 1> in_view1(data.data(), in_shape1);
+  auto reqs1 = kernel.Setup(ctx, in_view1, args);
+
+  std::vector<OutputType> out_data1(volume(reqs1.output_shapes[0][0]));
+  OutTensorCPU<OutputType, 1> out_view1(out_data1.data(),
+      reqs1.output_shapes[0][0].to_static<1>());
+  kernel.Run(ctx, out_view1, in_view1, args);
+
+  // Second call with different nfft=64 - should create new plan
+  args.nfft = 64;
+  TensorShape<1> in_shape2{64};
+  InTensorCPU<float, 1> in_view2(data.data(), in_shape2);
+  auto reqs2 = kernel.Setup(ctx, in_view2, args);
+
+  EXPECT_EQ(reqs2.output_shapes[0][0][0], 33);  // 64/2+1
+
+  std::vector<OutputType> out_data2(volume(reqs2.output_shapes[0][0]));
+  OutTensorCPU<OutputType, 1> out_view2(out_data2.data(),
+      reqs2.output_shapes[0][0].to_static<1>());
+  kernel.Run(ctx, out_view2, in_view2, args);
+}
+
+// Test 1D input with complex output
+TEST(Fft1DCpuEdgeCases, Input1DComplex) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = 0;
+  args.nfft = 16;
+
+  std::vector<float> data(16);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = std::sin(2.0f * M_PI * i / 16);
+  }
+  TensorShape<1> in_shape{16};
+  InTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  auto reqs = kernel.Setup(ctx, in_view, args);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  auto out_shape = reqs.output_shapes[0][0];
+  EXPECT_EQ(out_shape[0], 9);  // 16/2+1 = 9
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args);
+}
+
+// Test 1D input with magnitude output
+TEST(Fft1DCpuEdgeCases, Input1DMagnitude) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_MAGNITUDE;
+  args.transform_axis = 0;
+  args.nfft = 16;
+
+  std::vector<float> data(16);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = std::sin(2.0f * M_PI * i / 16);
+  }
+  TensorShape<1> in_shape{16};
+  InTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  auto reqs = kernel.Setup(ctx, in_view, args);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  auto out_shape = reqs.output_shapes[0][0];
+  EXPECT_EQ(out_shape[0], 9);  // 16/2+1 = 9
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args);
+}
+
+// Test with non-power-of-2 nfft (uses complex impl, not real impl)
+TEST(Fft1DCpuEdgeCases, NonPowerOf2Nfft) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = 0;
+  args.nfft = 10;  // Not a power of 2
+
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  InTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  auto reqs = kernel.Setup(ctx, in_view, args);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  auto out_shape = reqs.output_shapes[0][0];
+  EXPECT_EQ(out_shape[0], 6);  // 10/2+1 = 6
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args);
+}
+
+// Test with non-power-of-2 nfft and zero padding
+TEST(Fft1DCpuEdgeCases, NonPowerOf2NfftWithPadding) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = 0;
+  args.nfft = 15;  // Not a power of 2, and larger than input
+
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  InTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  auto reqs = kernel.Setup(ctx, in_view, args);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  auto out_shape = reqs.output_shapes[0][0];
+  EXPECT_EQ(out_shape[0], 8);  // 15/2+1 = 8
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args);
+}
+
+// Test with default nfft (nfft <= 0 defaults to n)
+TEST(Fft1DCpuEdgeCases, DefaultNfft) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = 0;
+  args.nfft = 0;  // Should default to n
+
+  std::vector<float> data(16);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{16};
+  InTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  auto reqs = kernel.Setup(ctx, in_view, args);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  auto out_shape = reqs.output_shapes[0][0];
+  EXPECT_EQ(out_shape[0], 9);  // 16/2+1 = 9
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args);
+}
+
+// Test power spectrum with 1D input
+TEST(Fft1DCpuEdgeCases, Input1DPower) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_POWER;
+  args.transform_axis = 0;
+  args.nfft = 32;
+
+  std::vector<float> data(32);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = std::cos(2.0f * M_PI * 4 * i / 32);  // 4 Hz signal
+  }
+  TensorShape<1> in_shape{32};
+  InTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  auto reqs = kernel.Setup(ctx, in_view, args);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  auto out_shape = reqs.output_shapes[0][0];
+  EXPECT_EQ(out_shape[0], 17);  // 32/2+1 = 17
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args);
+
+  // All outputs should be non-negative (power spectrum)
+  for (int i = 0; i < 17; i++) {
+    EXPECT_GE(out_data[i], 0.0f);
+  }
+}
+
+// ============================================================================
+// Error path tests
+// ============================================================================
+
+// Test error: invalid transform axis
+TEST(Fft1DCpuErrors, InvalidTransformAxis) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 2;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = 5;  // Invalid for 2D tensor
+  args.nfft = 8;
+
+  std::vector<float> data(24);
+  TensorShape<2> in_shape{3, 8};
+  InTensorCPU<float, 2> in_view(data.data(), in_shape);
+
+  EXPECT_THROW(kernel.Setup(ctx, in_view, args), DALIException);
+}
 
 }  // namespace test
 }  // namespace fft
