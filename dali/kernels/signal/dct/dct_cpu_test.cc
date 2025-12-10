@@ -155,6 +155,377 @@ INSTANTIATE_TEST_SUITE_P(Dct1DCpuTest, Dct1DCpuTest, testing::Combine(
     testing::Values(-1, 4)  // ndct
   ));  // NOLINT
 
+// ============================================================================
+// Additional tests for improved code coverage
+// ============================================================================
+
+// Test with negative axis (defaults to last axis) - line 44
+TEST(Dct1DCpuEdgeCases, NegativeAxis) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 2;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<float> data(24);  // 4 x 6
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<2> in_shape{4, 6};
+  OutTensorCPU<float, 2> in_view(data.data(), in_shape);
+
+  DctArgs args;
+  args.dct_type = 2;
+  args.normalize = false;
+  args.ndct = -1;
+
+  // axis = -1 should default to Dims - 1 = 1
+  auto reqs = kernel.Setup(ctx, in_view, args, -1);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  // Should process along axis 1 (last axis)
+  EXPECT_EQ(out_shape[0], 4);  // unchanged
+  EXPECT_EQ(out_shape[1], 6);  // ndct defaults to n=6
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 2> out_view(out_data.data(), out_shape.to_static<2>());
+  kernel.Run(ctx, out_view, in_view, args, -1);
+}
+
+// Test with negative axis for 1D - line 44
+TEST(Dct1DCpuEdgeCases, NegativeAxis1D) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  DctArgs args;
+  args.dct_type = 2;
+  args.normalize = false;
+  args.ndct = -1;
+
+  // axis = -1 should default to Dims - 1 = 0
+  auto reqs = kernel.Setup(ctx, in_view, args, -1);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  EXPECT_EQ(out_shape[0], 10);
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args, -1);
+}
+
+// Test DCT type I with normalize=true (triggers warning) - lines 51-53
+TEST(Dct1DCpuEdgeCases, DctType1WithNormalize) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  DctArgs args;
+  args.dct_type = 1;  // DCT type I
+  args.normalize = true;  // This triggers the warning path
+  args.ndct = -1;
+
+  // Should succeed but print a warning and set normalize=false internally
+  auto reqs = kernel.Setup(ctx, in_view, args, 0);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  EXPECT_EQ(out_shape[0], 10);
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args, 0);
+}
+
+// Test cosine table caching (args != args_) - line 65
+TEST(Dct1DCpuEdgeCases, CosineTableCaching) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  // First call with dct_type=2
+  DctArgs args1;
+  args1.dct_type = 2;
+  args1.normalize = false;
+  args1.ndct = -1;
+
+  auto reqs1 = kernel.Setup(ctx, in_view, args1, 0);
+  auto out_shape1 = reqs1.output_shapes[0][0];
+  std::vector<OutputType> out_data1(volume(out_shape1));
+  OutTensorCPU<OutputType, 1> out_view1(out_data1.data(), out_shape1.to_static<1>());
+  kernel.Run(ctx, out_view1, in_view, args1, 0);
+
+  // Second call with same size but different args (dct_type=3)
+  // This triggers the args != args_ branch
+  DctArgs args2;
+  args2.dct_type = 3;  // Different DCT type
+  args2.normalize = false;
+  args2.ndct = -1;
+
+  auto reqs2 = kernel.Setup(ctx, in_view, args2, 0);
+  auto out_shape2 = reqs2.output_shapes[0][0];
+  std::vector<OutputType> out_data2(volume(out_shape2));
+  OutTensorCPU<OutputType, 1> out_view2(out_data2.data(), out_shape2.to_static<1>());
+  kernel.Run(ctx, out_view2, in_view, args2, 0);
+
+  // Third call with same args but different normalization
+  DctArgs args3;
+  args3.dct_type = 3;
+  args3.normalize = true;  // Different normalize
+  args3.ndct = -1;
+
+  auto reqs3 = kernel.Setup(ctx, in_view, args3, 0);
+  auto out_shape3 = reqs3.output_shapes[0][0];
+  std::vector<OutputType> out_data3(volume(out_shape3));
+  OutTensorCPU<OutputType, 1> out_view3(out_data3.data(), out_shape3.to_static<1>());
+  kernel.Run(ctx, out_view3, in_view, args3, 0);
+}
+
+// Test with different ndct values - line 57-58
+TEST(Dct1DCpuEdgeCases, NdctVariations) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<float> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  // Test ndct = 0 (should default to n)
+  DctArgs args1;
+  args1.dct_type = 2;
+  args1.normalize = false;
+  args1.ndct = 0;
+
+  auto reqs1 = kernel.Setup(ctx, in_view, args1, 0);
+  auto out_shape1 = reqs1.output_shapes[0][0];
+  EXPECT_EQ(out_shape1[0], 10);  // ndct defaults to n=10
+
+  // Test ndct > n (should default to n)
+  DctArgs args2;
+  args2.dct_type = 2;
+  args2.normalize = false;
+  args2.ndct = 100;  // Greater than n=10
+
+  auto reqs2 = kernel.Setup(ctx, in_view, args2, 0);
+  auto out_shape2 = reqs2.output_shapes[0][0];
+  EXPECT_EQ(out_shape2[0], 10);  // ndct defaults to n=10
+
+  // Test explicit ndct within range
+  DctArgs args3;
+  args3.dct_type = 2;
+  args3.normalize = false;
+  args3.ndct = 5;  // Valid: 0 < 5 <= 10
+
+  auto reqs3 = kernel.Setup(ctx, in_view, args3, 0);
+  auto out_shape3 = reqs3.output_shapes[0][0];
+  EXPECT_EQ(out_shape3[0], 5);  // ndct = 5
+}
+
+// Test 3D input
+TEST(Dct1DCpuEdgeCases, Input3D) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 3;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<float> data(60);  // 3 x 4 x 5
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<3> in_shape{3, 4, 5};
+  OutTensorCPU<float, 3> in_view(data.data(), in_shape);
+
+  DctArgs args;
+  args.dct_type = 2;
+  args.normalize = false;
+  args.ndct = -1;
+
+  // Process along axis 2
+  auto reqs = kernel.Setup(ctx, in_view, args, 2);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  EXPECT_EQ(out_shape[0], 3);
+  EXPECT_EQ(out_shape[1], 4);
+  EXPECT_EQ(out_shape[2], 5);
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 3> out_view(out_data.data(), out_shape.to_static<3>());
+  kernel.Run(ctx, out_view, in_view, args, 2);
+}
+
+// Test 4D input
+TEST(Dct1DCpuEdgeCases, Input4D) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 4;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<float> data(120);  // 2 x 3 x 4 x 5
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<float>(i);
+  }
+  TensorShape<4> in_shape{2, 3, 4, 5};
+  OutTensorCPU<float, 4> in_view(data.data(), in_shape);
+
+  DctArgs args;
+  args.dct_type = 2;
+  args.normalize = false;
+  args.ndct = -1;
+
+  // Process along axis 3 (last axis)
+  auto reqs = kernel.Setup(ctx, in_view, args, 3);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  EXPECT_EQ(out_shape[0], 2);
+  EXPECT_EQ(out_shape[1], 3);
+  EXPECT_EQ(out_shape[2], 4);
+  EXPECT_EQ(out_shape[3], 5);
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 4> out_view(out_data.data(), out_shape.to_static<4>());
+  kernel.Run(ctx, out_view, in_view, args, 3);
+}
+
+// Test double precision
+TEST(Dct1DCpuEdgeCases, DoublePrecision) {
+  using OutputType = double;
+  using InputType = double;
+  constexpr int Dims = 1;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<double> data(10);
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<double>(i) * 0.1;
+  }
+  TensorShape<1> in_shape{10};
+  OutTensorCPU<double, 1> in_view(data.data(), in_shape);
+
+  DctArgs args;
+  args.dct_type = 2;
+  args.normalize = true;
+  args.ndct = -1;
+
+  auto reqs = kernel.Setup(ctx, in_view, args, 0);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  EXPECT_EQ(out_shape[0], 10);
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape.to_static<1>());
+  kernel.Run(ctx, out_view, in_view, args, 0);
+}
+
+// Test double precision 2D
+TEST(Dct1DCpuEdgeCases, DoublePrecision2D) {
+  using OutputType = double;
+  using InputType = double;
+  constexpr int Dims = 2;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<double> data(20);  // 4 x 5
+  for (size_t i = 0; i < data.size(); i++) {
+    data[i] = static_cast<double>(i) * 0.1;
+  }
+  TensorShape<2> in_shape{4, 5};
+  OutTensorCPU<double, 2> in_view(data.data(), in_shape);
+
+  DctArgs args;
+  args.dct_type = 4;  // Test DCT type 4
+  args.normalize = false;
+  args.ndct = 3;
+
+  auto reqs = kernel.Setup(ctx, in_view, args, 1);
+  auto out_shape = reqs.output_shapes[0][0];
+
+  EXPECT_EQ(out_shape[0], 4);
+  EXPECT_EQ(out_shape[1], 3);  // ndct = 3
+
+  std::vector<OutputType> out_data(volume(out_shape));
+  OutTensorCPU<OutputType, 2> out_view(out_data.data(), out_shape.to_static<2>());
+  kernel.Run(ctx, out_view, in_view, args, 1);
+}
+
+// ============================================================================
+// Error path tests (DALI_ENFORCE)
+// ============================================================================
+
+// Test error: invalid axis (out of bounds) - line 45
+TEST(Dct1DCpuErrors, InvalidAxis) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 2;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<float> data(24);
+  TensorShape<2> in_shape{4, 6};
+  OutTensorCPU<float, 2> in_view(data.data(), in_shape);
+
+  DctArgs args;
+  args.dct_type = 2;
+  args.normalize = false;
+  args.ndct = -1;
+
+  // axis = 5 is invalid for 2D tensor (valid: 0, 1)
+  EXPECT_THROW(kernel.Setup(ctx, in_view, args, 5), DALIException);
+}
+
+// Test error: DCT type I with n=1 - line 50
+TEST(Dct1DCpuErrors, DctType1WithSingleElement) {
+  using OutputType = float;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Dct1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  std::vector<float> data = {1.0f};  // Single element
+  TensorShape<1> in_shape{1};
+  OutTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  DctArgs args;
+  args.dct_type = 1;  // DCT type I requires n > 1
+  args.normalize = false;
+  args.ndct = -1;
+
+  EXPECT_THROW(kernel.Setup(ctx, in_view, args, 0), DALIException);
+}
+
 }  // namespace test
 }  // namespace dct
 }  // namespace signal
