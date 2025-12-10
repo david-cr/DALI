@@ -17,6 +17,7 @@
 #include <vector>
 #include "dali/core/util.h"
 #include "dali/test/test_tensors.h"
+#include "dali/kernels/signal/window/extract_windows_gpu.h"
 #include "dali/kernels/signal/window/extract_windows_gpu.cuh"
 #include "dali/kernels/signal/window/window_functions.h"
 #include "dali/kernels/dynamic_scratchpad.h"
@@ -303,6 +304,318 @@ TEST(ExtractHorizontalWindowsGPU, SizeSweep) {
   vector<float> window(60);
   HammingWindow(make_span(window));
   TestBatchedExtract(shape, false, Padding::Reflect, false, make_cspan(window));
+}
+
+// ============================================================================
+// Tests for ExtractWindowsGPU facade class (covers Setup overloads)
+// ============================================================================
+
+// Test ExtractWindowsGPU with vertical=true using TensorListShape overload
+TEST(ExtractWindowsGPUFacade, VerticalWithTensorListShape) {
+  ExtractWindowsGPU<float, float> kernel;
+
+  TensorListShape<1> lengths = {{ 100, 200, 150 }};
+  int N = lengths.num_samples();
+
+  TestTensorList<float, 1> in_list;
+  in_list.reshape(lengths);
+  auto in_cpu = in_list.cpu();
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < lengths[i][0]; j++)
+      in_cpu[i].data[j] = 1000 * (i + 1) + j;
+  }
+
+  ExtractWindowsBatchedArgs args;
+  args.window_length = 32;
+  args.window_center = 16;
+  args.window_step = 8;
+  args.padding = Padding::Reflect;
+  args.vertical = true;  // Triggers vertical branch (line 47-48)
+  args.concatenate = false;
+  args.output_window_length = -1;
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  // Use Setup overload with TensorListShape (line 36-37)
+  auto req = kernel.Setup(ctx, lengths, args);
+  ASSERT_EQ(req.output_shapes.size(), 1u);
+  ASSERT_EQ(req.output_shapes[0].num_samples(), N);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder(ctx.gpu.stream));
+  ctx.scratchpad = &dyn_scratchpad;
+
+  TestTensorList<float, 2> out;
+  out.reshape(req.output_shapes[0].to_static<2>());
+
+  auto in_gpu = in_list.gpu(0);
+  auto out_gpu = out.gpu(0);
+  CUDA_CALL(cudaMemset(out_gpu.data[0], 0, sizeof(float) * out_gpu.shape.num_elements()));
+
+  auto window_gpu = make_tensor_gpu<1>(static_cast<float*>(nullptr), { 0 });
+  kernel.Run(ctx, out_gpu, in_gpu, window_gpu);
+  CUDA_CALL(cudaDeviceSynchronize());
+
+  auto out_cpu = out.cpu();
+  // Basic validation - output should exist and have correct shape
+  for (int i = 0; i < N; i++) {
+    ASSERT_GT(out_cpu.shape[i].num_elements(), 0);
+  }
+}
+
+// Test ExtractWindowsGPU with vertical=false (horizontal) using TensorListShape
+TEST(ExtractWindowsGPUFacade, HorizontalWithTensorListShape) {
+  ExtractWindowsGPU<float, float> kernel;
+
+  TensorListShape<1> lengths = {{ 100, 200, 150 }};
+  int N = lengths.num_samples();
+
+  TestTensorList<float, 1> in_list;
+  in_list.reshape(lengths);
+  auto in_cpu = in_list.cpu();
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < lengths[i][0]; j++)
+      in_cpu[i].data[j] = 1000 * (i + 1) + j;
+  }
+
+  ExtractWindowsBatchedArgs args;
+  args.window_length = 32;
+  args.window_center = 16;
+  args.window_step = 8;
+  args.padding = Padding::Zero;
+  args.vertical = false;  // Horizontal
+  args.concatenate = true;
+  args.output_window_length = -1;
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  // Use Setup overload with TensorListShape (line 36-37)
+  auto req = kernel.Setup(ctx, lengths, args);
+  ASSERT_EQ(req.output_shapes.size(), 1u);
+  ASSERT_EQ(req.output_shapes[0].num_samples(), 1);  // concatenated
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder(ctx.gpu.stream));
+  ctx.scratchpad = &dyn_scratchpad;
+
+  TestTensorList<float, 2> out;
+  out.reshape(req.output_shapes[0].to_static<2>());
+
+  auto in_gpu = in_list.gpu(0);
+  auto out_gpu = out.gpu(0);
+  CUDA_CALL(cudaMemset(out_gpu.data[0], 0, sizeof(float) * out_gpu.shape.num_elements()));
+
+  auto window_gpu = make_tensor_gpu<1>(static_cast<float*>(nullptr), { 0 });
+  kernel.Run(ctx, out_gpu, in_gpu, window_gpu);
+  CUDA_CALL(cudaDeviceSynchronize());
+
+  auto out_cpu = out.cpu();
+  ASSERT_GT(out_cpu.shape[0].num_elements(), 0);
+}
+
+// Test ExtractWindowsGPU with InListGPU overload (lines 28-29)
+TEST(ExtractWindowsGPUFacade, SetupWithInListGPU) {
+  ExtractWindowsGPU<float, float> kernel;
+
+  TensorListShape<1> lengths = {{ 100, 200, 150 }};
+  int N = lengths.num_samples();
+
+  TestTensorList<float, 1> in_list;
+  in_list.reshape(lengths);
+  auto in_cpu = in_list.cpu();
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < lengths[i][0]; j++)
+      in_cpu[i].data[j] = 1000 * (i + 1) + j;
+  }
+
+  ExtractWindowsBatchedArgs args;
+  args.window_length = 32;
+  args.window_center = 16;
+  args.window_step = 8;
+  args.padding = Padding::Reflect;
+  args.vertical = true;  // vertical
+  args.concatenate = false;
+  args.output_window_length = -1;
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  auto in_gpu = in_list.gpu(0);
+
+  // Create an empty window tensor for the Setup call
+  auto window_gpu = make_tensor_gpu<1>(static_cast<float*>(nullptr), { 0 });
+
+  // Use Setup overload with InListGPU (line 28-29)
+  auto req = kernel.Setup(ctx, in_gpu, window_gpu, args);
+  ASSERT_EQ(req.output_shapes.size(), 1u);
+  ASSERT_EQ(req.output_shapes[0].num_samples(), N);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder(ctx.gpu.stream));
+  ctx.scratchpad = &dyn_scratchpad;
+
+  TestTensorList<float, 2> out;
+  out.reshape(req.output_shapes[0].to_static<2>());
+
+  auto out_gpu = out.gpu(0);
+  CUDA_CALL(cudaMemset(out_gpu.data[0], 0, sizeof(float) * out_gpu.shape.num_elements()));
+
+  kernel.Run(ctx, out_gpu, in_gpu, window_gpu);
+  CUDA_CALL(cudaDeviceSynchronize());
+
+  auto out_cpu = out.cpu();
+  for (int i = 0; i < N; i++) {
+    ASSERT_GT(out_cpu.shape[i].num_elements(), 0);
+  }
+}
+
+// Test switching from horizontal to vertical implementation (impl caching logic)
+TEST(ExtractWindowsGPUFacade, SwitchOrientation) {
+  ExtractWindowsGPU<float, float> kernel;
+
+  TensorListShape<1> lengths = {{ 100, 200 }};
+  int N = lengths.num_samples();
+
+  TestTensorList<float, 1> in_list;
+  in_list.reshape(lengths);
+  auto in_cpu = in_list.cpu();
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < lengths[i][0]; j++)
+      in_cpu[i].data[j] = 1000 * (i + 1) + j;
+  }
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  // First call with horizontal
+  ExtractWindowsBatchedArgs args1;
+  args1.window_length = 32;
+  args1.window_center = 16;
+  args1.window_step = 8;
+  args1.padding = Padding::Zero;
+  args1.vertical = false;  // horizontal first
+  args1.concatenate = false;
+
+  auto req1 = kernel.Setup(ctx, lengths, args1);
+  ASSERT_EQ(req1.output_shapes.size(), 1u);
+
+  // Second call with vertical - should create new impl
+  ExtractWindowsBatchedArgs args2;
+  args2.window_length = 32;
+  args2.window_center = 16;
+  args2.window_step = 8;
+  args2.padding = Padding::Reflect;
+  args2.vertical = true;  // now vertical - triggers impl recreation
+  args2.concatenate = false;
+
+  auto req2 = kernel.Setup(ctx, lengths, args2);
+  ASSERT_EQ(req2.output_shapes.size(), 1u);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder(ctx.gpu.stream));
+  ctx.scratchpad = &dyn_scratchpad;
+
+  TestTensorList<float, 2> out;
+  out.reshape(req2.output_shapes[0].to_static<2>());
+
+  auto in_gpu = in_list.gpu(0);
+  auto out_gpu = out.gpu(0);
+  CUDA_CALL(cudaMemset(out_gpu.data[0], 0, sizeof(float) * out_gpu.shape.num_elements()));
+
+  auto window_gpu = make_tensor_gpu<1>(static_cast<float*>(nullptr), { 0 });
+  kernel.Run(ctx, out_gpu, in_gpu, window_gpu);
+  CUDA_CALL(cudaDeviceSynchronize());
+
+  auto out_cpu = out.cpu();
+  for (int i = 0; i < N; i++) {
+    ASSERT_GT(out_cpu.shape[i].num_elements(), 0);
+  }
+}
+
+// Test ExtractWindowsGPU with int16_t input type
+TEST(ExtractWindowsGPUFacade, Int16Input) {
+  ExtractWindowsGPU<float, int16_t> kernel;
+
+  TensorListShape<1> lengths = {{ 100, 150 }};
+  int N = lengths.num_samples();
+
+  TestTensorList<int16_t, 1> in_list;
+  in_list.reshape(lengths);
+  auto in_cpu = in_list.cpu();
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < lengths[i][0]; j++)
+      in_cpu[i].data[j] = static_cast<int16_t>(100 * (i + 1) + j);
+  }
+
+  ExtractWindowsBatchedArgs args;
+  args.window_length = 32;
+  args.window_center = 16;
+  args.window_step = 8;
+  args.padding = Padding::Zero;
+  args.vertical = true;
+  args.concatenate = false;
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  auto req = kernel.Setup(ctx, lengths, args);
+  ASSERT_EQ(req.output_shapes.size(), 1u);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder(ctx.gpu.stream));
+  ctx.scratchpad = &dyn_scratchpad;
+
+  TestTensorList<float, 2> out;
+  out.reshape(req.output_shapes[0].to_static<2>());
+
+  auto in_gpu = in_list.gpu(0);
+  auto out_gpu = out.gpu(0);
+  CUDA_CALL(cudaMemset(out_gpu.data[0], 0, sizeof(float) * out_gpu.shape.num_elements()));
+
+  auto window_gpu = make_tensor_gpu<1>(static_cast<float*>(nullptr), { 0 });
+  kernel.Run(ctx, out_gpu, in_gpu, window_gpu);
+  CUDA_CALL(cudaDeviceSynchronize());
+}
+
+// Test ExtractWindowsGPU with int8_t input type
+TEST(ExtractWindowsGPUFacade, Int8Input) {
+  ExtractWindowsGPU<float, int8_t> kernel;
+
+  TensorListShape<1> lengths = {{ 100, 150 }};
+  int N = lengths.num_samples();
+
+  TestTensorList<int8_t, 1> in_list;
+  in_list.reshape(lengths);
+  auto in_cpu = in_list.cpu();
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < lengths[i][0]; j++)
+      in_cpu[i].data[j] = static_cast<int8_t>((i + 1) + (j % 100));
+  }
+
+  ExtractWindowsBatchedArgs args;
+  args.window_length = 32;
+  args.window_center = 16;
+  args.window_step = 8;
+  args.padding = Padding::Reflect;
+  args.vertical = false;
+  args.concatenate = true;
+
+  KernelContext ctx;
+  ctx.gpu.stream = 0;
+
+  auto req = kernel.Setup(ctx, lengths, args);
+  ASSERT_EQ(req.output_shapes.size(), 1u);
+
+  DynamicScratchpad dyn_scratchpad(AccessOrder(ctx.gpu.stream));
+  ctx.scratchpad = &dyn_scratchpad;
+
+  TestTensorList<float, 2> out;
+  out.reshape(req.output_shapes[0].to_static<2>());
+
+  auto in_gpu = in_list.gpu(0);
+  auto out_gpu = out.gpu(0);
+  CUDA_CALL(cudaMemset(out_gpu.data[0], 0, sizeof(float) * out_gpu.shape.num_elements()));
+
+  auto window_gpu = make_tensor_gpu<1>(static_cast<float*>(nullptr), { 0 });
+  kernel.Run(ctx, out_gpu, in_gpu, window_gpu);
+  CUDA_CALL(cudaDeviceSynchronize());
 }
 
 }  // namespace signal
