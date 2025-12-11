@@ -818,6 +818,72 @@ TEST(Fft1DCpuErrors, InvalidTransformAxis) {
   EXPECT_THROW(kernel.Setup(ctx, in_view, args), DALIException);
 }
 
+// Test error: Run() called without Setup() first (covers line 52 error path)
+TEST(Fft1DCpuErrors, RunWithoutSetup) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  FftArgs args;
+  args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  args.transform_axis = 0;
+  args.nfft = 16;
+
+  std::vector<float> data(16);
+  TensorShape<1> in_shape{16};
+  InTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  std::vector<OutputType> out_data(9);  // 16/2+1 = 9
+  TensorShape<1> out_shape{9};
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), out_shape);
+
+  // Calling Run() without Setup() should throw an exception
+  // This covers the "impl_ != nullptr" error path on line 52
+  EXPECT_THROW(kernel.Run(ctx, out_view, in_view, args), DALIException);
+}
+
+// Test error: Run() called with different args than Setup() (covers line 53 error path)
+TEST(Fft1DCpuErrors, RunWithMismatchedArgs) {
+  using OutputType = std::complex<float>;
+  using InputType = float;
+  constexpr int Dims = 1;
+  Fft1DCpu<OutputType, InputType, Dims> kernel;
+
+  KernelContext ctx;
+  DynamicScratchpad dyn_scratchpad(AccessOrder::host());
+  ctx.scratchpad = &dyn_scratchpad;
+
+  FftArgs setup_args;
+  setup_args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  setup_args.transform_axis = 0;
+  setup_args.nfft = 16;
+
+  std::vector<float> data(16);
+  TensorShape<1> in_shape{16};
+  InTensorCPU<float, 1> in_view(data.data(), in_shape);
+
+  // Call Setup with one set of args
+  auto reqs = kernel.Setup(ctx, in_view, setup_args);
+
+  std::vector<OutputType> out_data(9);  // 16/2+1 = 9
+  OutTensorCPU<OutputType, 1> out_view(out_data.data(), reqs.output_shapes[0][0].to_static<1>());
+
+  // Create different args for Run
+  FftArgs run_args;
+  run_args.spectrum_type = FFT_SPECTRUM_COMPLEX;
+  run_args.transform_axis = 0;
+  run_args.nfft = 32;  // Different nfft than used in Setup
+
+  // Calling Run() with different args should throw an exception
+  // This covers the "args == args_" error path on line 53
+  EXPECT_THROW(kernel.Run(ctx, out_view, in_view, run_args), DALIException);
+}
+
 }  // namespace test
 }  // namespace fft
 }  // namespace signal
