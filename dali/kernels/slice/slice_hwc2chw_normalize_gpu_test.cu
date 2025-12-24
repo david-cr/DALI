@@ -63,7 +63,7 @@ class SliceHwc2ChwNormalizeGPUTest : public ::testing::Test {
   }
 
   KernelContext ctx_;
-  DynamicScratchpad scratchpad_;
+  DynamicScratchpad scratchpad_{AccessOrder::host()};
   Kernel kernel_;
   TestTensorList<uint8_t, ndim> input_;
 };
