@@ -15,16 +15,18 @@
 import nvidia.dali.backend as _b
 from nvidia.dali.fn import _to_snake_case
 import makefun
-from ._batch import Batch, _get_batch_size
+from ._batch import Batch, _get_batch_size, as_batch as _as_batch
 from ._tensor import Tensor
 from . import ops
 from . import _type
-import types
 import copy
 from . import _invocation, _device, _eval_mode, _eval_context
 import nvidia.dali.ops as _ops
 import nvidia.dali.types
 import nvtx
+from nvidia.dali import internal as _internal
+from nvidia.dali.ops import _docs, _names
+from . import random as _random
 
 
 def is_external(x):
@@ -86,11 +88,13 @@ def _get_input_device_type(x):
     return dev.device_type if dev is not None else None
 
 
-def _to_tensor(x, device=None):
+def _to_tensor(x, device=None, dtype=None):
     with nvtx.annotate("to_tensor", domain="op_builder"):
         if x is None:
             return None
         if isinstance(x, Tensor):
+            if dtype is not None and x.dtype != dtype:
+                return Tensor(x, dtype=dtype, device=device)
             if device is not None:
                 return x.to_device(device)
             return x
@@ -98,43 +102,58 @@ def _to_tensor(x, device=None):
             if x.is_batch:
                 raise ValueError("Batch invocation result cannot be used as a single tensor")
             return Tensor(invocation_result=x, device=device)
-        return Tensor(x, device=device)
+        return Tensor(x, device=device, dtype=dtype)
 
 
-def _to_batch(x, batch_size, device=None):
+def _to_batch(x, batch_size, device=None, dtype=None):
     with nvtx.annotate("to_batch", domain="op_builder"):
         if x is None:
             return None
         if isinstance(x, Batch):
+            if dtype is not None and x.dtype != dtype:
+                return _as_batch(x, dtype=dtype, device=device)
             if device is not None:
                 return x.to_device(device)
             return x
         if isinstance(x, _invocation.InvocationResult):
             if x.is_batch:
-                return Batch(invocation_result=x, device=device)
+                return Batch(invocation_result=x, device=device, dtype=dtype)
             else:
-                x = _to_tensor(x)  # fall back to regular replication
+                x = _to_tensor(x, dtype=dtype)  # fall back to regular replication
         actual_batch_size = _get_batch_size(x)
         if actual_batch_size is not None:
             if batch_size is not None and actual_batch_size != batch_size:
                 raise ValueError(f"Unexpected batch size: {actual_batch_size} != {batch_size}")
-            return Batch(x, device=device)
+            return Batch(x, device=device, dtype=dtype)
 
-        return Batch.broadcast(x, batch_size, device=device)
+        return Batch.broadcast(x, batch_size, device=device, dtype=dtype)
 
 
 _unsupported_args = {"bytes_per_sample_hint", "preserve"}
 
 
 def _find_or_create_module(root_module, module_path):
-    module = root_module
-    for path_part in module_path:
-        submodule = getattr(module, path_part, None)
-        if submodule is None:
-            submodule = types.ModuleType(path_part)
-            setattr(module, path_part, submodule)
-        module = submodule
-    return module
+    return _internal.get_submodule(root_module, module_path)
+
+
+def _scalar_arg_type_id(dtype_id):
+    if dtype_id == nvidia.dali.types.DALIDataType._INT32_VEC:
+        return nvidia.dali.types.INT32
+    elif dtype_id == nvidia.dali.types.DALIDataType._FLOAT_VEC:
+        return nvidia.dali.types.FLOAT
+    elif dtype_id == nvidia.dali.types.DALIDataType._STRING_VEC:
+        return nvidia.dali.types.STRING
+    elif dtype_id == nvidia.dali.types.DALIDataType._BOOL_VEC:
+        return nvidia.dali.types.BOOL
+    else:
+        return dtype_id
+
+
+def _argument_type_conversion(dtype_id):
+    try:
+        return _type.dtype(_scalar_arg_type_id(dtype_id))
+    except KeyError:
+        return None
 
 
 def build_operator_class(schema):
@@ -166,11 +185,17 @@ def build_operator_class(schema):
     op_class.fn_name = _to_snake_case(class_name)
     op_class.legacy_op = legacy_op_class
     op_class.is_stateful = schema.IsStateful()
+    op_class.has_random_state_arg = schema.HasRandomStateArg()
     op_class._instance_cache = {}  # TODO(michalz): Make it thread-local
+    op_class._generated = True
     op_class.__init__ = build_constructor(schema, op_class)
     op_class.__call__ = build_call_function(schema, op_class)
     op_class.__module__ = module.__name__
     op_class.__qualname__ = class_name
+    op_class._argument_conversion_map = {
+        arg: _argument_type_conversion(schema.GetArgumentType(arg))
+        for arg in schema.GetArgumentNames(include_hidden=True)
+    }
     setattr(module, class_name, op_class)
     return op_class
 
@@ -179,26 +204,28 @@ def build_constructor(schema, op_class):
     stateful = op_class.is_stateful
     function_name = "__init__"
 
-    call_args = []
+    init_args = []
+    used_kwargs = set()
     for arg in schema.GetArgumentNames():
         if arg in _unsupported_args:
             continue
         if schema.IsTensorArgument(arg):
             continue
         if schema.IsArgumentOptional(arg):
-            call_args.append(f"{arg}=None")
+            init_args.append(f"{arg}=None")
         else:
-            call_args.append(arg)
+            init_args.append(arg)
+        used_kwargs.add(arg)
 
-    if call_args:
-        call_args = ["*"] + call_args
+    if init_args:
+        init_args = ["*"] + init_args
     header_args = [
         "self",
         "max_batch_size=None",
         "name=None",
         'device="cpu"',
         "num_inputs=None",
-    ] + call_args
+    ] + init_args
     header = f"__init__({', '.join(header_args)})"
 
     def init(self, max_batch_size, name, **kwargs):
@@ -207,15 +234,42 @@ def build_constructor(schema, op_class):
         if stateful:
             self._call_id = 0
 
-    function = makefun.create_function(header, init)
+    doc = _docs._docstring_generator_class(schema.Name(), api="dynamic", args=used_kwargs)
+    function = makefun.create_function(header, init, doc=doc)
     function.__qualname__ = f"{op_class.__name__}.{function_name}"
 
     return function
 
 
+def _get_inputs(schema):
+    inputs = []
+    min_inputs = schema.MinNumInput()
+    max_inputs = schema.MaxNumInput()
+    num_separate_inputs = min_inputs
+    if schema.HasInputDox() or max_inputs <= _docs._MAX_INPUT_SPELLED_OUT:
+        num_separate_inputs = max_inputs
+
+    for i in range(num_separate_inputs):
+        name = _names._get_input_name(schema, i)
+        if i < min_inputs:
+            inputs.append(name)
+        else:
+            inputs.append(f"{name}=None")
+
+    if inputs:
+        inputs.append("/")
+    if num_separate_inputs < max_inputs:
+        inputs.append("*inputs")
+    else:
+        inputs.append("*")
+    return inputs
+
+
 def build_call_function(schema, op_class):
     stateful = op_class.is_stateful
+    has_random_state_arg = op_class.has_random_state_arg
     call_args = []
+    used_kwargs = set()
     for arg in schema.GetArgumentNames():
         if arg in _unsupported_args:
             continue
@@ -225,28 +279,20 @@ def build_call_function(schema, op_class):
             call_args.append(f"{arg}=None")
         else:
             call_args.append(arg)
+        used_kwargs.add(arg)
 
-    inputs = []
-    min_inputs = schema.MinNumInput()
-    max_inputs = schema.MaxNumInput()
-    input_indices = {}
-    arguments = schema.GetArgumentNames()
-    for i in range(max_inputs):
-        if schema.HasInputDox():
-            input_name = schema.GetInputName(i)
-            if input_name in arguments:
-                input_name += "_input"
-        else:
-            input_name = f"input_{i}"
-        input_indices[input_name] = i
-        if i < min_inputs:
-            inputs.append(f"{input_name}")
-        else:
-            inputs.append(f"{input_name}=None")
+    call_args = ["batch_size=None"] + call_args
 
-    call_args = ["*", "batch_size=None"] + call_args
-    if inputs:
-        inputs = inputs + ["/"]
+    # Add rng argument for random operators
+    if has_random_state_arg:
+        call_args.append("rng=None")
+        used_kwargs.add("rng")
+        # Remove 'seed' from used_kwargs and signature_args if present
+        if "seed" in used_kwargs:
+            used_kwargs.remove("seed")
+
+    inputs = _get_inputs(schema)
+
     header = f"__call__({', '.join(['self'] + inputs + call_args)})"
 
     def call(self, *raw_args, batch_size=None, **raw_kwargs):
@@ -272,6 +318,26 @@ def build_call_function(schema, op_class):
             inputs = []
             kwargs = {}
 
+            if has_random_state_arg:
+                rng = raw_kwargs.pop("rng", None)
+                if rng is None:
+                    rng = _random.get_default_rng()
+                if not isinstance(rng, _random.RNG):
+                    raise ValueError(
+                        f"rng must be an instance of nvidia.dali.experimental.dynamic.random.RNG, "
+                        f"but got {type(rng)}"
+                    )
+
+                # Use the provided RNG to generate 7 random uint32 values.
+                # This creates a fixed-size random state tensor.
+                # 7 uint32 words = 224 bits; required is 194 bits (operator reads first 25 bytes).
+                # Only one random state tensor is created per call, not per sample.
+                raw_kwargs["_random_state"] = Tensor(
+                    [rng() for _ in range(7)],
+                    dtype=_type.dtype(nvidia.dali.types.UINT32),
+                    device="cpu",
+                )
+
             if is_batch:
                 with nvtx.annotate("__call__: convert to batches", domain="op_builder"):
                     for i, inp in enumerate(raw_args):
@@ -283,7 +349,10 @@ def build_call_function(schema, op_class):
                     for k, v in raw_kwargs.items():
                         if v is None:
                             continue
-                        kwargs[k] = _to_batch(v, batch_size, device=_device.Device("cpu"))
+                        dtype = op_class._argument_conversion_map[k]
+                        kwargs[k] = _to_batch(
+                            v, batch_size, device=_device.Device("cpu"), dtype=dtype
+                        )
             else:
                 with nvtx.annotate("__call__: convert to tensors", domain="op_builder"):
                     for inp in raw_args:
@@ -293,7 +362,8 @@ def build_call_function(schema, op_class):
                     for k, v in raw_kwargs.items():
                         if v is None:
                             continue
-                        kwargs[k] = _to_tensor(v)
+                        dtype = op_class._argument_conversion_map[k]
+                        kwargs[k] = _to_tensor(v, dtype=dtype)
 
             with nvtx.annotate("__call__: shallowcopy", domain="op_builder"):
                 inputs = [copy.copy(x) for x in inputs]
@@ -331,7 +401,7 @@ def build_call_function(schema, op_class):
                 )
             ):
                 # Evaluate immediately
-                invocation.run(_eval_context.EvalContext.get())
+                invocation.run(_eval_context.EvalContext.current())
             else:
                 pass
                 # Lazy evaluation
@@ -356,7 +426,8 @@ def build_call_function(schema, op_class):
                         Tensor(invocation_result=invocation[i]) for i in range(len(invocation))
                     )
 
-    function = makefun.create_function(header, call)
+    doc = _docs._docstring_generator_call(schema.Name(), api="dynamic", args=used_kwargs)
+    function = makefun.create_function(header, call, doc=doc)
 
     return function
 
@@ -370,36 +441,16 @@ def build_fn_wrapper(op):
     module_path = schema.ModulePath()
     from .. import dynamic as parent
 
-    module = parent
-    for path_part in module_path:
-        new_module = getattr(module, path_part, None)
-        if new_module is None:
-            new_module = types.ModuleType(path_part)
-            setattr(module, path_part, new_module)
-        module = new_module
+    module = _internal.get_submodule(parent, module_path)
 
     fn_name = _to_snake_case(op.schema.OperatorName())
-    inputs = []
-    min_inputs = schema.MinNumInput()
-    max_inputs = schema.MaxNumInput()
-    input_indices = {}
-    arguments = schema.GetArgumentNames()
-    for i in range(max_inputs):
-        if schema.HasInputDox():
-            input_name = schema.GetInputName(i)
-            if input_name in arguments:
-                input_name += "_input"
-        else:
-            input_name = f"input_{i}"
-        input_indices[input_name] = i
-        if i < min_inputs:
-            inputs.append(f"{input_name}")
-        else:
-            inputs.append(f"{input_name}=None")
+    inputs = _get_inputs(schema)
 
     fixed_args = []
     tensor_args = []
     signature_args = ["batch_size=None, device=None"]
+    used_kwargs = set()
+
     for arg in op.schema.GetArgumentNames():
         if arg in _unsupported_args:
             continue
@@ -407,15 +458,22 @@ def build_fn_wrapper(op):
             tensor_args.append(arg)
         else:
             fixed_args.append(arg)
+        used_kwargs.add(arg)
         if op.schema.IsArgumentOptional(arg):
             signature_args.append(f"{arg}=None")
         else:
             signature_args.append(arg)
 
-    if signature_args:
-        signature_args = ["*"] + signature_args
-    if inputs:
-        inputs = inputs + ["/"]
+    if schema.HasRandomStateArg():
+        tensor_args.append("rng")
+        used_kwargs.add("rng")
+        signature_args.append("rng=None")
+        # Remove 'seed' from used_kwargs and signature_args if present
+        if "seed" in used_kwargs:
+            used_kwargs.remove("seed")
+        if "seed" in signature_args:
+            signature_args.remove("seed")
+
     header = f"{fn_name}({', '.join(inputs + signature_args)})"
 
     def fn_call(*inputs, batch_size=None, device=None, **raw_kwargs):
@@ -442,6 +500,7 @@ def build_fn_wrapper(op):
             for arg in tensor_args
             if arg in raw_kwargs and raw_kwargs[arg] is not None
         }
+
         # If device is not specified, infer it from the inputs and call_args
         if device is None:
 
@@ -492,11 +551,27 @@ def build_fn_wrapper(op):
         # Call the operator (the result is an Invocation object)
         return op_inst(*inputs, batch_size=batch_size, **call_args)
 
-    function = makefun.create_function(header, fn_call)
+    doc = _docs._docstring_generator_fn(schema.Name(), api="dynamic", args=used_kwargs)
+    function = makefun.create_function(header, fn_call, doc=doc)
     function.op_class = op
     function.schema = schema
+    function._generated = True
+    function.__module__ = module.__name__
     setattr(module, fn_name, function)
     return function
+
+
+def build_fn_wrappers(all_ops):
+    wrappers = []
+    for op in all_ops:
+        if op.op_name.startswith("_"):
+            continue
+        # Allow random operators to have functional wrappers even if stateful
+        if op.schema.IsStateful() and not op.schema.HasRandomStateArg():
+            continue
+
+        wrappers.append(build_fn_wrapper(op))
+    return wrappers
 
 
 def build_operators():
@@ -505,7 +580,12 @@ def build_operators():
     deprecated = {}
     op_map = {}
     for op_name in _all_ops:
-        if op_name.endswith("ExternalSource") or op_name.endswith("PythonFunction"):
+        if (
+            op_name.endswith("ExternalSource")
+            or op_name.endswith("PythonFunction")
+            or op_name.endswith("NumbaFunction")
+            or op_name.endswith("JaxFunction")
+        ):
             continue
 
         schema = _b.GetSchema(op_name)
@@ -520,4 +600,6 @@ def build_operators():
         module = _find_or_create_module(ops, schema.ModulePath())
         setattr(module, what, op_map[in_favor])
 
-    return all_op_classes
+    all_fn_wrappers = build_fn_wrappers(all_op_classes)
+
+    return all_op_classes, all_fn_wrappers

@@ -59,7 +59,7 @@ option(WITH_DYNAMIC_NVIMGCODEC "Links nvimgcodec library dynamically during runt
 option(BUILD_WITH_ASAN "Build with ASAN" OFF)
 option(BUILD_WITH_LSAN "Build with LSAN" OFF)
 option(BUILD_WITH_UBSAN "Build with UBSAN" OFF)
-
+option(BUILD_STD_SEMAPHORE "Whether to use std::counting_semaphore instead of POSIX one." OFF)
 
 # Tests use OpenCV...
 cmake_dependent_option(BUILD_TEST "Build googletest test suite" ON
@@ -375,12 +375,12 @@ if (RELWITHDEBINFO_CUDA_DEBUG)
   set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO ${CMAKE_CUDA_FLAGS_RELWITHDEBINFO} " -lineinfo")
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_C_STANDARD 11)
 
-set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD 20)
 
 # CXX flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-free-nonheap-object -Wno-unused-variable -Wno-unused-function -Wno-strict-overflow -Wno-maybe-uninitialized -Wno-unknown-warning-option -fno-strict-aliasing -fPIC -fvisibility=hidden")
@@ -403,6 +403,10 @@ endif()
 
 if ("${ARCH}" STREQUAL "aarch64-linux")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a")
+endif()
+
+if (BUILD_STD_SEMAPHORE)
+  add_definitions("-DDALI_USE_STD_SEMAPHORE")
 endif()
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
@@ -465,12 +469,12 @@ else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unknown-pragmas")
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_C_STANDARD 11)
 
-set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 # Include directories

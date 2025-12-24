@@ -266,7 +266,7 @@ void FillTensorFromDlPack(
 
   size_t bytes = volume(shape) * dali_type.size();
 
-  auto typed_shape = ConvertShape(shape, batch);
+  const auto &typed_shape = ConvertShape(shape, batch);
   bool is_pinned = dl_tensor.device.device_type == kDLCUDAHost;
   int device_id = CPU_ONLY_DEVICE_ID;
   // according to the docs kDLCUDAHost = kDLCPU | kDLCUDA so test it as a the first option
@@ -328,7 +328,7 @@ void FillTensorFromCudaArray(const py::object &object,
     CheckContiguousTensor(strides, shape, type.size());
   }
 
-  auto typed_shape = ConvertShape(shape, batch);
+  const auto &typed_shape = ConvertShape(shape, batch);
   auto *ptr = PyLong_AsVoidPtr(cu_a_interface["data"].cast<py::tuple>()[0].ptr());
 
   // it is for __cuda_array_interface__ so device_id < 0 is not a valid value
@@ -683,10 +683,10 @@ void ExposeTensor(py::module &m) {
       Exposes the tensor as a DLPack capsule.
 
       Note:
-        When NOT using the dynamic execution (when `exec_dynamic` is set to ``False`` or other
-        parameters are not compatible with this execution mode), the pipeline
-        outputs may be reused and overwritten by DALI after `release_outputs` has been called.
-        Make sure the dynamic execution is enabled if you want to keep the outputs indefinitely.
+        When NOT using the default execution model (i.e., when ``exec_dynamic=False`` or other
+        parameters are incompatible with this execution mode), the pipeline outputs may be reused
+        and overwritten by DALI after ``release_outputs`` has been called. Make sure that the
+        default execution model is enabled if you want to keep the outputs indefinitely.
 
       stream : int, None
           The CUDA stream the the caller is going to use to access the buffer.
@@ -940,10 +940,10 @@ void ExposeTensor(py::module &m) {
       Exposes the tensor as a DLPack capsule.
 
       Note:
-        When NOT using the dynamic execution (when `exec_dynamic` is set to ``False`` or other
-        parameters are not compatible with this execution mode), the pipeline
-        outputs may be reused and overwritten by DALI after `release_outputs` has been called.
-        Make sure the dynamic execution is enabled if you want to keep the outputs indefinitely.
+        When NOT using the default execution model (i.e., when ``exec_dynamic=False`` or other
+        parameters are incompatible with this execution mode), the pipeline outputs may be reused
+        and overwritten by DALI after ``release_outputs`` has been called. Make sure that the
+        default execution model is enabled if you want to keep the outputs indefinitely.
 
       stream : int, None
           The CUDA stream the the caller is going to use to access the buffer.
@@ -2890,6 +2890,7 @@ PYBIND11_MODULE(backend_impl, m) {
   m.def("TryGetSchema", &TryGetSchema, py::return_value_policy::reference);
 
   py::class_<OpSchema>(m, "OpSchema")
+    .def("Name", &OpSchema::name)
     .def("OperatorName", &OpSchema::OperatorName)
     .def("ModulePath", &OpSchema::ModulePath)
     .def("Dox", &OpSchema::Dox)
@@ -2954,7 +2955,7 @@ PYBIND11_MODULE(backend_impl, m) {
     .def("GetArgumentType", &OpSchema::GetArgumentType)
     .def("HasArgumentDefaultValue", &OpSchema::HasArgumentDefaultValue)
     .def("GetArgumentDefaultValueString", &OpSchema::GetArgumentDefaultValueString)
-    .def("GetArgumentNames", &OpSchema::GetArgumentNames)
+    .def("GetArgumentNames", &OpSchema::GetArgumentNames, "include_hidden"_a = false)
     .def("IsArgumentOptional", &OpSchema::HasOptionalArgument,
         "arg_name"_a)
     .def("IsTensorArgument", &OpSchema::IsTensorArgument)
@@ -2981,7 +2982,9 @@ PYBIND11_MODULE(backend_impl, m) {
         [](OpSchema *schema, const std::string &arg_name) {
           return schema->HasArgument(arg_name);
         })
-    .def("GetSupportedBackends", &GetSupportedBackends);
+    .def("GetSupportedBackends", &GetSupportedBackends)
+    .def("HasRandomSeedArg", &OpSchema::HasRandomSeedArg)
+    .def("HasRandomStateArg", &OpSchema::HasRandomStateArg);
 
   ExposeTensorLayout(types_m);
   ExposeTensor(m);

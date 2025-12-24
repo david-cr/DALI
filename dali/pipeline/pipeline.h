@@ -77,7 +77,7 @@ class DLL_PUBLIC Pipeline {
    * @param prefetch_queue_depth sets the length of the executor internal pipeline
    * @param async_execution whether to use extra host-threads to enable asynchronous execution
    * of cpu and gpu work. See AsyncExecutor/AsyncPipelinedExecutor.
-   * @param dynamic_execution whether to use the dynamic executor, enabling GPU->CPU transfers
+   * @param dynamic_execution whether to use the Executor2, enabling GPU->CPU transfers
    * and dynamic allocation of memory.
    * @param bytes_per_sample_hint Estimated size of each sample to be processed.
    * Defaults to 0. Ignored when dynamic_execution is true.
@@ -259,7 +259,7 @@ class DLL_PUBLIC Pipeline {
   DLL_PUBLIC OperatorBase *GetOperator(std::string_view instance_name);
 
   /**
-   * @brief Rreturns an input graph node with a given name
+   * @brief Returns an input graph node with a given name
    */
   DLL_PUBLIC const graph::OpNode *GetInputOperatorNode(std::string_view name);
 
@@ -780,6 +780,10 @@ class DLL_PUBLIC Pipeline {
 
       auto do_copy = [&]() {
         node.last_input.Reset();
+        if constexpr (std::is_same_v<OperatorBackend, GPUBackend>) {
+          if (!order.is_device())
+            order = set_last_stream_.get();
+        }
         node.last_input.set_order(order);
         node.last_input.Copy(data, order, ext_src_setting_mode.use_copy_kernel);
         if (ext_src_setting_mode.sync)
@@ -841,6 +845,7 @@ class DLL_PUBLIC Pipeline {
       else
         return mixed_nodes_;
     }
+    CUDAStreamLease set_last_stream_;
   };
 
   RepeatLastInputs repeat_last_;

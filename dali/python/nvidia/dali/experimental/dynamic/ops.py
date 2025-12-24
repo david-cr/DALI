@@ -172,7 +172,7 @@ class Operator:
             return
 
         if ctx is None:
-            ctx = _eval_context.EvalContext.get()
+            ctx = _eval_context.EvalContext.current()
         with self._device:
             with ctx:
                 self._init_spec(inputs, args)
@@ -194,48 +194,53 @@ class Operator:
                 self._op_backend = _b._Operator(self._op_spec)
 
     def run(self, ctx, *inputs, batch_size=None, **args):
-        if (
-            batch_size is not None
-            and self._max_batch_size is not None
-            and batch_size > self._max_batch_size
-            and self.schema.IsStateful()
-        ):
-            raise RuntimeError(
-                f"The batch size {batch_size} is larger than the `max_batch_size` "
-                f"{self._max_batch_size} specified when the operator was created."
-            )
+        device_id = ctx.device_id if ctx is not None else None
+        device_ctx = (
+            _device.Device("gpu", device_id) if device_id is not None else _device.Device("cpu")
+        )
+        with device_ctx:
+            if (
+                batch_size is not None
+                and self._max_batch_size is not None
+                and batch_size > self._max_batch_size
+                and self.schema.IsStateful()
+            ):
+                raise RuntimeError(
+                    f"The batch size {batch_size} is larger than the `max_batch_size` "
+                    f"{self._max_batch_size} specified when the operator was created."
+                )
 
-        def _is_batch():
-            for input in inputs:
-                if isinstance(input, ((_b.TensorListCPU, _b.TensorListGPU))):
-                    return True
-            for input in args.values():
-                if isinstance(input, ((_b.TensorListCPU, _b.TensorListGPU))):
-                    return True
-            return False
+            def _is_batch():
+                for input in inputs:
+                    if isinstance(input, ((_b.TensorListCPU, _b.TensorListGPU))):
+                        return True
+                for input in args.values():
+                    if isinstance(input, ((_b.TensorListCPU, _b.TensorListGPU))):
+                        return True
+                return False
 
-        is_batch = batch_size is not None or _is_batch()
-        if self._is_backend_initialized():
-            if self.schema.IsStateful():
-                # clearing the backend in a stateful op would destroy the state
-                self.check_compatible(inputs, batch_size, args)
-            elif not self.is_compatible(inputs, batch_size, args):
-                # we can reinitialize a stateless operator - not very efficient :(
-                self._reset_backend()
+            is_batch = batch_size is not None or _is_batch()
+            if self._is_backend_initialized():
+                if self.schema.IsStateful():
+                    # clearing the backend in a stateful op would destroy the state
+                    self.check_compatible(inputs, batch_size, args)
+                elif not self.is_compatible(inputs, batch_size, args):
+                    # we can reinitialize a stateless operator - not very efficient :(
+                    self._reset_backend()
 
-        self._init_backend(ctx, inputs, args)
-        workspace = _b._Workspace(ctx._thread_pool, ctx._cuda_stream)
-        for i, input in enumerate(inputs):
-            workspace.AddInput(self._to_batch(input).evaluate()._backend)
-        for name, arg in args.items():
-            workspace.AddArgumentInput(name, self._to_batch(arg).evaluate()._backend)
-        self._op_backend.SetupAndRun(workspace, batch_size)
-        out = workspace.GetOutputs()
-        if is_batch:
-            return tuple(out)
-        else:
-            tensors = tuple(o[0] for o in out)
-            return tensors
+            self._init_backend(ctx, inputs, args)
+            workspace = _b._Workspace(ctx._thread_pool, ctx._cuda_stream)
+            for i, input in enumerate(inputs):
+                workspace.AddInput(self._to_batch(input).evaluate()._storage)
+            for name, arg in args.items():
+                workspace.AddArgumentInput(name, self._to_batch(arg).evaluate()._storage)
+            self._op_backend.SetupAndRun(workspace, batch_size)
+            out = workspace.GetOutputs()
+            if is_batch:
+                return tuple(out)
+            else:
+                tensors = tuple(o[0] for o in out)
+                return tensors
 
     def _to_batch(self, x):
         if not isinstance(x, Batch):
@@ -357,6 +362,11 @@ class Reader(Operator):
             )
 
     def run(self, ctx=None, *inputs, **args):
+        """
+        Runs the reader and obtains one result (batch or sample, depending on `batch_size`).
+
+        Do not call this function directly. Use `__call__` instead.
+        """
         if self._api_type is None:
             self._api_type = "run"
         elif self._api_type != "run":
@@ -367,6 +377,21 @@ class Reader(Operator):
         return super().run(ctx, *inputs, **args)
 
     def next_epoch(self, batch_size=None, ctx: Optional[_eval_context.EvalContext] = None):
+        """
+        Obtains an iterator that goes over the next epoch from the reader.
+
+        The return value is an iterator that returns either individual samples (if `batch_size` is
+        ``None`` and was not specified at construction) or batches (if `batch_size` was specified
+        here or at construction).
+
+        This iterator will go over the dataset (or shard, if sharding was specified at construction)
+        once.
+
+        .. note::
+            The iterator must be traversed completely before the next call to `next_epoch` is made.
+            Therefore, it is impossible to traverse one reader using two iterators.
+            If another iterator is necessary, create a separate reader instance.
+        """
         if batch_size is None:
             batch_size = self._batch_size
         if batch_size is not None:
@@ -383,7 +408,7 @@ class Reader(Operator):
             )
 
         if ctx is None:
-            ctx = _eval_context.EvalContext.get()
+            ctx = _eval_context.EvalContext.current()
         with ctx:
             if not self._is_backend_initialized():
                 if self._actual_batch_size is None:
@@ -409,7 +434,7 @@ class Reader(Operator):
             raise RuntimeError("Cannot mix samples(), batches() and run() on the same reader.")
 
         if ctx is None:
-            ctx = _eval_context.EvalContext.get()
+            ctx = _eval_context.EvalContext.current()
         with ctx:
             if batch_size is None:
                 batch_size = self._batch_size
@@ -440,10 +465,11 @@ class Reader(Operator):
 
 
 _all_ops = []
+_all_functions = []
 
 
 def _initialize():
     from . import _op_builder
 
-    global _all_ops
-    _all_ops = _op_builder.build_operators()
+    global _all_ops, _all_functions
+    _all_ops, _all_functions = _op_builder.build_operators()
