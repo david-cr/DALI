@@ -16,7 +16,7 @@
 #define DALI_CORE_HOST_DEV_H_
 
 #if defined(__CUDACC__) && !(defined(__CUDA__) && defined(__clang__))
-#define DALI_NO_EXEC_CHECK #pragma nv_exec_check_disable
+#define DALI_NO_EXEC_CHECK _Pragma("nv_exec_check_disable")
 #else
 #define DALI_NO_EXEC_CHECK
 #endif
