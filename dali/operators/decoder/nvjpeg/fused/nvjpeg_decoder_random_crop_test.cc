@@ -89,4 +89,54 @@ TEST_F(ImageRandomCropCheckpointingTest_GPU, Simple) {
   this->RunTest<uint8_t>(std::move(pipe), 2);
 }
 
+// Helper subclass exposing GetOperator for testing
+class TestPipelineWrapper : public PipelineWrapper {
+ public:
+  using PipelineWrapper::PipelineWrapper;
+  using PipelineWrapper::GetOperator;
+};
+
+// Test that exercises SerializeCheckpoint and DeserializeCheckpoint
+// (lines 33-41 in nvjpeg_decoder_random_crop.cc)
+TEST_F(ImageRandomCropCheckpointingTest_GPU, SerializeDeserializeCheckpoint) {
+  TestPipelineWrapper pipe(4, {{"decoded", "gpu"}});
+  pipe.EnableCheckpointing();
+
+  auto filepath = testing::dali_extra_path() + "/db/single/jpeg/134/site-1534685_1280.jpg";
+  std::string decoder_id = "decoder";
+
+  pipe.AddOperator(
+    OpSpec("FileReader")
+      .AddOutput("file", StorageDevice::CPU)
+      .AddOutput("label", StorageDevice::CPU)
+      .AddArg("pad_last_batch", true)
+      .AddArg("files", std::vector{filepath}));
+
+  pipe.AddOperator(
+    OpSpec("decoders__ImageRandomCrop")
+      .AddInput("file", StorageDevice::CPU)
+      .AddOutput("decoded", StorageDevice::GPU)
+      .AddArg("device", "mixed"),
+    decoder_id);
+
+  pipe.Build();
+
+  // Run a few iterations to advance the RNG state
+  for (int i = 0; i < 3; i++)
+    pipe.RunIteration<uint8_t>();
+
+  // Save state, then serialize it
+  auto *op = pipe.GetOperator(decoder_id);
+  OpCheckpoint cpt(decoder_id);
+  op->SaveState(cpt, {});
+
+  std::string serialized = op->SerializeCheckpoint(cpt);
+  EXPECT_FALSE(serialized.empty());
+
+  // Deserialize into a fresh checkpoint and restore
+  OpCheckpoint cpt2(decoder_id);
+  op->DeserializeCheckpoint(cpt2, serialized);
+  op->RestoreState(cpt2);
+}
+
 }  // namespace dali
