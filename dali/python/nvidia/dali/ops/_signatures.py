@@ -1,4 +1,4 @@
-# Copyright (c) 2023-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,12 +21,14 @@ import tokenize
 from contextlib import closing
 from inspect import Parameter, Signature, getdoc, getmodule, ismodule
 from pathlib import Path
-from typing import Any, List, Literal, Optional, Sequence, Union
+from types import NoneType
+from typing import Any, List, Literal, Optional, Sequence, Union, get_args
 
 from nvidia.dali import backend as _b
 from nvidia.dali import fn, ops, types
 from nvidia.dali import types as _types
 from nvidia.dali.ops import _docs, _names, _registry
+
 
 Api = Literal["fn", "ops", "dynamic"]
 
@@ -83,7 +85,8 @@ _enum_mapping = {
 _Tensor = _create_annotation_placeholder("Tensor")
 _Batch = _create_annotation_placeholder("Batch")
 _TensorLike = _create_annotation_placeholder("TensorLike")
-_DType = _create_annotation_placeholder("DType")
+_DTypeLike = _create_annotation_placeholder("DTypeLike")
+_DeviceLike = _create_annotation_placeholder("DeviceLike")
 
 
 def _api_to_module(api: Api):
@@ -106,7 +109,7 @@ def _scalar_element_annotation(scalar_dtype, api: Api):
         t = type(dummy_val)
 
         if api == "dynamic" and t is types.DALIDataType:
-            t = Union[_DALIDataType, _DType]
+            t = _DTypeLike
 
         if t in _enum_mapping:
             return _enum_mapping[t]
@@ -268,7 +271,7 @@ def _get_positional_input_params(schema, input_annotation_gen=_get_annotation_in
                 Parameter(
                     _names._get_variadic_input_name(),
                     Parameter.VAR_POSITIONAL,
-                    annotation=Optional[input_annotation_gen(schema)],
+                    annotation=input_annotation_gen(schema),
                 )
             )
     return param_list
@@ -278,7 +281,8 @@ def _get_keyword_params(
     schema,
     api: Api,
     all_args_optional: bool,
-    data_node_tensors: bool,
+    data_node_kwargs: bool,
+    batch_kwargs: bool,
     include_kwarg_inputs: bool,
     include_only_inputs: bool,
 ):
@@ -306,11 +310,12 @@ def _get_keyword_params(
             continue
 
         if is_arg_input and include_kwarg_inputs:
-            annotation = (
-                Union[_DataNode, _TensorLikeArg, kw_annotation]
-                if data_node_tensors
-                else Union[_TensorLikeArg, _Batch, kw_annotation]
-            )
+            annotation_types = [_TensorLikeArg, kw_annotation]
+            if data_node_kwargs:
+                annotation_types.insert(0, _DataNode)
+            if batch_kwargs:
+                annotation_types.insert(0, _Batch)
+            annotation = Union[tuple(annotation_types)]
         else:
             annotation = kw_annotation
 
@@ -353,11 +358,7 @@ def _get_implicit_extra_params(schema, api: Api, include_init_header: bool):
     If include_init_header is True, arguments are positional or keyword, so the order matters.
     """
 
-    supported_backends = schema.GetSupportedBackends()
-    if api == "dynamic" and "mixed" in supported_backends:
-        supported_backends.append("gpu")
-
-    device_annotation = Literal[tuple(supported_backends)] if supported_backends else str
+    device_annotation = _DeviceLike if api == "dynamic" else str
 
     if include_init_header:
         params = [
@@ -377,7 +378,7 @@ def _get_implicit_extra_params(schema, api: Api, include_init_header: bool):
                 name="device",
                 kind=Parameter.POSITIONAL_OR_KEYWORD,
                 default="cpu",
-                annotation=Union["Device", device_annotation],  # noqa # type: ignore
+                annotation=device_annotation,
             ),
             Parameter(
                 name="num_inputs",
@@ -427,9 +428,10 @@ def _call_signature(
     include_only_inputs=False,
     include_kwargs=True,
     include_self=False,
-    include_batch_size=False,
+    batch_size_annotation=None,
     return_annotation=True,
-    data_node_kwargs=True,
+    allow_data_node_kwargs=True,
+    allow_batch_kwargs=True,
     all_args_optional=False,
     include_init_header=False,
     input_annotation_gen=_get_annotation_input_regular,
@@ -454,13 +456,15 @@ def _call_signature(
         If keyword arguments should be included in the signature, by default True
     include_self : bool, optional
         Prepend `self` as first positional argument in the signature, by default False
-    include_batch_size : bool, optional
-        Prepend `batch_size` as first keyword-only argument in the signature, by default False
+    batch_size_annotation : type, optional
+        Ignored if api != 'dynamic'. Annotation to use for the batch size, by default None
     return_annotation : bool, optional
         If the signature should have a return annotation or return None (for ops class __init__),
         by default True
-    data_node_kwargs : bool, optional
+    allow_data_node_kwargs : bool, optional
         If tensor keyword arguments should accept DataNodes, by default True
+    allow_batch_kwargs : bool, optional
+        Whether keyword arguments should accept ndd.Batch, by default True
     all_args_optional : bool, optional
         Make all keyword arguments optional, even if they are not - needed by the ops API, where
         the argument can be specified in either __init__ or __call__, by default False
@@ -484,8 +488,19 @@ def _call_signature(
         include_init_header = include_init_header and api == "dynamic"
         param_list.extend(_get_implicit_extra_params(schema, api, include_init_header))
 
-    if include_batch_size:
-        param_list.append(Parameter(name="batch_size", kind=Parameter.KEYWORD_ONLY, annotation=int))
+    if api == "dynamic" and batch_size_annotation is not None:  # include batch_size argument
+        if batch_size_annotation is NoneType or NoneType in get_args(batch_size_annotation):
+            default_batch_size = None
+        else:
+            default_batch_size = Parameter.empty
+        param_list.append(
+            Parameter(
+                name="batch_size",
+                kind=Parameter.KEYWORD_ONLY,
+                annotation=batch_size_annotation,
+                default=default_batch_size,
+            )
+        )
 
     if include_kwargs:
         param_list.extend(
@@ -493,7 +508,8 @@ def _call_signature(
                 schema,
                 api,
                 all_args_optional=all_args_optional,
-                data_node_tensors=data_node_kwargs,
+                data_node_kwargs=allow_data_node_kwargs,
+                batch_kwargs=allow_batch_kwargs,
                 include_kwarg_inputs=include_kwarg_inputs,
                 include_only_inputs=include_only_inputs,
             )
@@ -648,7 +664,7 @@ class {cls_name}:
 
 def _gen_dynamic_call_signature_no_input(schema: _b.OpSchema, **kwargs):
     """Generate function signatures for no-input dynamic mode ops. The overloads are:
-    - `(**kwargs) -> tensor-like`:
+    - `(*, batch_size: None = None, **kwargs) -> tensor-like`:
       Calling a no-input parameter without specifying a batch size returns a single sample
     - `(*, batch_size: int, **kwargs) -> batch`
       Invocation with a batch size returns a batch.
@@ -657,89 +673,47 @@ def _gen_dynamic_call_signature_no_input(schema: _b.OpSchema, **kwargs):
         _call_signature(
             schema,
             api="dynamic",
-            data_node_kwargs=False,
+            allow_data_node_kwargs=False,
+            batch_size_annotation=NoneType,
             return_annotation_gen=lambda _: _Tensor,
             **kwargs,
         ),
         _call_signature(
             schema,
             api="dynamic",
-            include_batch_size=True,
-            data_node_kwargs=False,
+            allow_data_node_kwargs=False,
+            batch_size_annotation=int,
             return_annotation_gen=lambda _: _Batch,
             **kwargs,
         ),
     )
 
 
-def _gen_dynamic_call_signature_single_input(schema: _b.OpSchema, **kwargs):
-    """Generate function signatures for single-input dynamic mode ops. The overloads are:
-    - `(tensor-like, /, **kwargs) -> Tensor | Batch`:
+def _gen_dynamic_call_signature_with_inputs(schema: _b.OpSchema, **kwargs):
+    """Generate function signatures for dynamic mode ops with one or more inputs.
+    The overloads are:
+    - `(*tensor-like, /, *, batch_size: None = None, **kwargs) -> Tensor`:
         When the input is a tensor, it is possible that one or more arguments are batches,
         therefore producing a batch by broadcasting.
-    - `(tensor-like, /, *, batch_size: int, **kwargs) -> Batch`:
-        If `batch_size` is specified, the output is always a batch.
-    - `(batch, /, **kwargs) -> Batch`:
-        If the input is a batch, if the `batch_size` argument is set to an integer,
-        it either matches and has no effect, or doesn't and causes a runtime error.
-        It is therefore ommitted from this overload.
+    - `(*tensor-like | batch, /, *, batch_size: int | None = None, **kwargs) -> Batch`:
+        If the input is a batch or `batch_size` is specified, the output is always a batch.
     """
     yield from (
         _call_signature(
             schema,
             api="dynamic",
-            data_node_kwargs=False,
+            allow_data_node_kwargs=False,
+            allow_batch_kwargs=False,
+            batch_size_annotation=NoneType,
             input_annotation_gen=lambda _: _TensorLike,
-            return_annotation_gen=lambda _: Union[_Tensor, _Batch],
+            return_annotation_gen=lambda _: _Tensor,
             **kwargs,
         ),
         _call_signature(
             schema,
             api="dynamic",
-            data_node_kwargs=False,
-            include_batch_size=True,
-            input_annotation_gen=lambda _: _TensorLike,
-            return_annotation_gen=lambda _: _Batch,
-            **kwargs,
-        ),
-        _call_signature(
-            schema,
-            api="dynamic",
-            data_node_kwargs=False,
-            input_annotation_gen=lambda _: _Batch,
-            return_annotation_gen=lambda _: _Batch,
-            **kwargs,
-        ),
-    )
-
-
-def _gen_dynamic_call_signature_multiple_inputs(schema: _b.OpSchema, **kwargs):
-    """Generate function signatures for single-input dynamic mode ops. The logic is similar to
-    ``_gen_dynamic_call_signature_single_input`` but functions accept ``TensorLike | Batch``
-    instead of ``TensorLike``. Since ``Batch`` <: ``TensorLike | Batch``, signatures are reordered.
-    """
-    yield from (
-        _call_signature(
-            schema,
-            api="dynamic",
-            data_node_kwargs=False,
-            input_annotation_gen=lambda _: _Batch,
-            return_annotation_gen=lambda _: _Batch,
-            **kwargs,
-        ),
-        _call_signature(
-            schema,
-            api="dynamic",
-            data_node_kwargs=False,
-            input_annotation_gen=lambda _: Union[_TensorLike, _Batch],
-            return_annotation_gen=lambda _: Union[_Tensor, _Batch],
-            **kwargs,
-        ),
-        _call_signature(
-            schema,
-            api="dynamic",
-            data_node_kwargs=False,
-            include_batch_size=True,
+            allow_data_node_kwargs=False,
+            batch_size_annotation=Optional[int],
             input_annotation_gen=lambda _: Union[_TensorLike, _Batch],
             return_annotation_gen=lambda _: _Batch,
             **kwargs,
@@ -756,10 +730,8 @@ def _gen_dynamic_call_signature(schema: _b.OpSchema, **kwargs):
     num_inputs = schema.MaxNumInput()
     if num_inputs == 0:
         generator = _gen_dynamic_call_signature_no_input
-    elif num_inputs == 1:
-        generator = _gen_dynamic_call_signature_single_input
     else:
-        generator = _gen_dynamic_call_signature_multiple_inputs
+        generator = _gen_dynamic_call_signature_with_inputs
 
     yield from generator(schema, **kwargs)
 
@@ -775,8 +747,14 @@ def _try_extend_reader_signature(schema: _b.OpSchema, op_name: str):
     if readers is None:
         return ""
     op = getattr(readers, op_name, None)
-    if op is None or not issubclass(op, dynamic.ops.Reader):
+    if op is None or not issubclass(op, dynamic._ops.Reader):
         return ""
+
+    def ret_type(type_name: str):
+        if op_name == "TFRecord":
+            return f"dict[str, {type_name}]"
+
+        return f"tuple[{type_name}, ...]"
 
     doc = getdoc(op)
     return f"""
@@ -784,7 +762,7 @@ def _try_extend_reader_signature(schema: _b.OpSchema, op_name: str):
     def next_epoch(
         self,
         ctx: Optional[EvalContext] = None,
-    ) -> Union[Iterable[tuple[Tensor, ...]], Iterable[tuple[Batch, ...]]]:
+    ) -> Iterable[{ret_type('Tensor')}]:
         \"""{doc}
         \"""
 
@@ -792,7 +770,7 @@ def _try_extend_reader_signature(schema: _b.OpSchema, op_name: str):
     def next_epoch(
         self,
         batch_size: int, ctx: Optional[EvalContext] = None,
-    ) -> Iterable[tuple[Batch, ...]]:
+    ) -> Iterable[{ret_type('Batch')}]:
         \"""{doc}
         \"""
 """
@@ -907,10 +885,10 @@ from collections.abc import Iterable
 
 from nvidia.dali._typing import TensorLike, TensorLikeArg
 from nvidia.dali.experimental.dynamic._batch import Batch as Batch
-from nvidia.dali.experimental.dynamic._device import Device as Device
+from nvidia.dali.experimental.dynamic._device import DeviceLike
 from nvidia.dali.experimental.dynamic._eval_context import EvalContext as EvalContext
 from nvidia.dali.experimental.dynamic._tensor import Tensor as Tensor
-from nvidia.dali.experimental.dynamic._type import DType as DType
+from nvidia.dali.experimental.dynamic._type import DTypeLike
 """
 
 

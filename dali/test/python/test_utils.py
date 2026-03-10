@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2019-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -955,12 +955,15 @@ def check_numba_compatibility_cpu(if_skip=True):
         return True
 
 
-def check_numba_compatibility_gpu(if_skip=True):
-    import nvidia.dali.plugin.numba.experimental as ex
+def check_numba_compatibility_gpu(if_skip=True, use_experimental: bool = False):
+    if use_experimental:
+        from nvidia.dali.plugin.numba.experimental import NumbaFunction
+    else:
+        from nvidia.dali.plugin.numba import NumbaFunction
 
-    if not ex.NumbaFunction._check_minimal_numba_version(
+    if not NumbaFunction._check_minimal_numba_version(
         False
-    ) or not ex.NumbaFunction._check_cuda_compatibility(False):
+    ) or not NumbaFunction._check_cuda_compatibility(False):
         if if_skip:
             raise SkipTest()
         else:
@@ -969,11 +972,48 @@ def check_numba_compatibility_gpu(if_skip=True):
         return True
 
 
-def create_sign_off_decorator():
+def create_sign_off_registry():
+    """
+    Creates a registry for tracking which operators have been tested.
+
+    Returns a SignOff instance that can be used in two ways:
+    1. As a decorator to mark tests: @sign_off("operator_name")
+    2. As a direct registration call inside tests: sign_off.register_test("operator_name")
+
+    Both patterns add operators to the same registry, which can be queried
+    via the `tested_ops` property.
+
+    Returns:
+        SignOff: An instance with methods for registering tested operators.
+
+    Example usage:
+        # Create a registry instance
+        sign_off = create_sign_off_registry()
+
+        # Pattern 1: Decorator style
+        @sign_off("operators.add", "operators.subtract")
+        def test_arithmetic_ops():
+            # Test implementation
+
+        # Pattern 2: Direct registration inside test
+        def test_conditional_ops():
+            sign_off.register_test("operators.multiply")
+           # Test implementation
+
+        # Check which operators were tested
+        print(sign_off.tested_ops)
+        # Output: {'operators.add', 'operators.subtract', 'operators.multiply'}
+
+    Note:
+        Each call to create_sign_off_registry() creates an independent registry
+        with its own operator tracking. Multiple references to the same instance
+        share the same registry.
+    """
     _tested_ops = []
 
     class SignOff:
         def __call__(self, *op_names):
+            """Use as decorator: @sign_off("operator_name")"""
             assert all(isinstance(op_name, str) for op_name in op_names)
             assert len(op_names)
             _tested_ops.extend(op_names)
@@ -982,6 +1022,12 @@ def create_sign_off_decorator():
                 return fn
 
             return dummy
+
+        def register_test(self, *op_names):
+            """Use directly in test: sign_off.register_test("operator_name")"""
+            assert all(isinstance(op_name, str) for op_name in op_names)
+            assert len(op_names)
+            _tested_ops.extend(op_names)
 
         @property
         def tested_ops(self):

@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2021-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ from nvidia.dali import fn
 import numpy as np
 from nvidia.dali.pipeline import Pipeline
 from nose_utils import assert_raises
+from nose2.tools import params
 
 
 @dali.pipeline_def(batch_size=2, num_threads=3, device_id=0)
@@ -37,7 +38,7 @@ def test_plain_indexing():
     for i in range(len(inp)):
         x = inp.at(i)
         assert np.array_equal(x[1, 1], cpu.at(i))
-        assert np.array_equal(x[1, 1], np.array(gpu.at(i)))
+        assert np.array_equal(x[1, 1], gpu.at(i))
 
 
 def _test_indexing(data_gen, input_layout, output_layout, dali_index_func, ref_index_func=None):
@@ -48,7 +49,7 @@ def _test_indexing(data_gen, input_layout, output_layout, dali_index_func, ref_i
         x = inp.at(i)
         ref = (ref_index_func or dali_index_func)(x)
         assert np.array_equal(ref, cpu.at(i))
-        assert np.array_equal(ref, np.array(gpu.at(i)))
+        assert np.array_equal(ref, gpu.at(i))
         assert cpu.layout() == output_layout
         assert gpu.layout() == output_layout
 
@@ -91,7 +92,7 @@ def test_swapped_ends():
     for i in range(len(inp)):
         x = inp.at(i)
         assert np.array_equal(x[2:1], cpu.at(i))
-        assert np.array_equal(x[2:1], np.array(gpu.at(i)))
+        assert np.array_equal(x[2:1], gpu.at(i))
 
 
 def test_noop():
@@ -125,7 +126,7 @@ def test_runtime_indexing():
             j = (j + 1) % len(lo_idxs)
             k = (k + 1) % len(hi_idxs)
             assert np.array_equal(ref, cpu.at(i))
-            assert np.array_equal(ref, np.array(gpu.at(i)))
+            assert np.array_equal(ref, gpu.at(i))
 
 
 def test_runtime_stride_dim1():
@@ -149,7 +150,7 @@ def test_runtime_stride_dim1():
             ref = x[::strides[j]]
             # fmt: on
             assert np.array_equal(ref, cpu.at(i))
-            assert np.array_equal(ref, np.array(gpu.at(i)))
+            assert np.array_equal(ref, gpu.at(i))
             j = (j + 1) % len(strides)
 
 
@@ -174,7 +175,7 @@ def test_runtime_stride_dim2():
             ref = x[:, ::strides[j]]
             # fmt: on
             assert np.array_equal(ref, cpu.at(i))
-            assert np.array_equal(ref, np.array(gpu.at(i)))
+            assert np.array_equal(ref, gpu.at(i))
             j = (j + 1) % len(strides)
 
 
@@ -205,7 +206,7 @@ def _test_invalid_args(device, args, message, run):
     data = [np.uint8([[1, 2, 3]]), np.uint8([[1, 2]])]
     pipe = Pipeline(2, 1, 0)
     src = fn.external_source(lambda: data, device=device)
-    pipe.set_outputs(fn.tensor_subscript(src, **args))
+    pipe.set_outputs(fn._tensor_subscript(src, **args))
     with assert_raises(RuntimeError, glob=message):
         pipe.build()
         if run:
@@ -240,11 +241,11 @@ def _test_too_many_indices(device):
     src = fn.external_source(lambda: data, device=device)
     pipe = index_pipe(src, lambda x: x[1, :])
 
-    # Verified by tensor_subscript
+    # Verified by _tensor_subscript
     with assert_raises(RuntimeError, glob="Too many indices"):
         _ = pipe.run()
 
-    # Verified by subscript_dim_check
+    # Verified by _subscript_dim_check
     pipe = index_pipe(src, lambda x: x[:, :])
     with assert_raises(RuntimeError, glob="Too many indices"):
         _ = pipe.run()
@@ -254,7 +255,7 @@ def _test_too_many_indices(device):
     with assert_raises(RuntimeError, glob="not enough dimensions"):
         _ = pipe.run()
 
-    # Verified by subscript_dim_check
+    # Verified by _subscript_dim_check
     pipe = index_pipe(src, lambda x: x[dali.newaxis, :, dali.newaxis, :])
     with assert_raises(RuntimeError, glob="Too many indices"):
         _ = pipe.run()
@@ -291,7 +292,7 @@ def test_multiple_skipped_dims():
     for i in range(len(inp)):
         x = inp.at(i)
         assert np.array_equal(x[1, :, :, 1], cpu.at(i))
-        assert np.array_equal(x[1, :, :, 1], np.array(gpu.at(i)))
+        assert np.array_equal(x[1, :, :, 1], gpu.at(i))
 
 
 def test_empty_slice():
@@ -302,4 +303,27 @@ def test_empty_slice():
     for i in range(len(inp)):
         x = inp.at(i)
         assert np.array_equal(x[0:0, 0:1], cpu.at(i))
-        assert np.array_equal(x[0:0, 0:1], np.array(gpu.at(i)))
+        assert np.array_equal(x[0:0, 0:1], gpu.at(i))
+
+
+@params(
+    (10, slice(-1, -11, -1)),
+    (12, slice(-2, -11, -2)),
+    (10, slice(None, -100, -2)),
+    (10, slice(None, -11, -9)),
+    (10, slice(-2, None, -9)),
+    (10, slice(None, None, -1)),
+)
+def test_negative_stride(length, ranges):
+    def slice_func(x):
+        return x[ranges]
+
+    data = [np.arange(length, dtype=np.int32)]
+    src = fn.external_source(lambda: data)
+    pipe = index_pipe(src, slice_func)
+    inp, cpu, gpu = tuple(out.as_cpu() for out in pipe.run())
+    for i in range(len(inp)):
+        x = inp.at(i)
+        ref = slice_func(x)
+        assert np.array_equal(ref, cpu.at(i))
+        assert np.array_equal(ref, gpu.at(i))

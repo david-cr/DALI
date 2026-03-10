@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import nvidia.dali.experimental.dynamic as ndd
 import numpy as np
-from nose_utils import attr
-from nose2.tools import params
-from nose_utils import assert_raises
+import nvidia.dali as dali
+import nvidia.dali.backend as _b
+import nvidia.dali.experimental.dynamic as ndd
 import test_tensor
+from ndd_utils import eval_modes
+from nose2.tools import params
+from nose_utils import SkipTest, assert_raises, attr
 
 
 def asnumpy(batch_or_tensor):
@@ -27,6 +29,7 @@ def asnumpy(batch_or_tensor):
         return test_tensor.asnumpy(batch_or_tensor)
 
 
+@eval_modes()
 @params(("cpu",), ("gpu",))
 def test_batch_construction(device_type):
     t0 = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
@@ -56,6 +59,7 @@ def test_batch_construction(device_type):
     assert b._storage.layout() == "AB"
 
 
+@eval_modes()
 @params(("cpu",), ("gpu",))
 def test_batch_from_empty_list(device_type):
     with assert_raises(ValueError, glob="Element type"):
@@ -67,6 +71,23 @@ def test_batch_from_empty_list(device_type):
     assert b.ndim == 0
 
 
+@eval_modes()
+@params(("cpu",), ("gpu",))
+def test_tensor_as_batch(device_type: str):
+    tensor = ndd.ones(shape=(2, 5, 5), dtype=ndd.float32).to_device(device_type)
+    ref_sample = tensor[0].cpu()
+    batch1 = ndd.as_batch(tensor)
+    batch2 = ndd.batch(tensor)
+
+    for batch in (batch1, batch2):
+        assert batch.batch_size == 2
+        assert batch.dtype == ref_sample.dtype
+        assert batch.shape == batch.batch_size * [ref_sample.shape]
+        for sample in batch:
+            assert np.array_equal(sample.cpu(), ref_sample)
+
+
+@eval_modes()
 @params(("cpu",), ("gpu",))
 def test_batch_as_batch(device_type):
     t0 = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
@@ -99,6 +120,7 @@ def test_batch_as_batch(device_type):
     assert b3.layout == b0.layout
 
 
+@eval_modes()
 def test_broadcast():
     a = np.array([1, 2, 3])
     b = ndd.Batch.broadcast(a, 5).evaluate()
@@ -115,6 +137,7 @@ def batch_equal(a, b):
     return True
 
 
+@eval_modes()
 @attr("pytorch")
 @params(("cpu",), ("cuda",))
 def test_batch_construction_with_torch_tensor(device_type):
@@ -128,11 +151,12 @@ def test_batch_construction_with_torch_tensor(device_type):
     assert b.ndim == 1
     assert b.shape == [(3,), (3,)]
     assert b.layout is None
-    ref = torch.from_dlpack(ndd.as_tensor(b)._storage)
+    ref = torch.from_dlpack(ndd.as_tensor(b).evaluate()._storage)
     assert torch.equal(data[0], ref[0])
     assert torch.equal(data[1], ref[1])
 
 
+@eval_modes()
 @params(("cpu",), ("gpu",))
 def test_batch_construction_with_tensor(device_type):
     t = ndd.tensor(np.array([1, 2, 3], dtype=np.uint8), device=device_type, layout="X")
@@ -145,6 +169,7 @@ def test_batch_construction_with_tensor(device_type):
     assert b.shape == [(3,)]
 
 
+@eval_modes()
 @params(("cpu",), ("gpu",))
 def test_batch_construction_with_conversion(device_type):
     data = [np.float64([1]), np.float64([1.25, 2.2, 0x1000001])]
@@ -171,6 +196,7 @@ def test_batch_construction_with_conversion(device_type):
     assert batch_equal(data_fp32, asnumpy(fp32))
 
 
+@eval_modes()
 @params(("cpu",), ("gpu",))
 def test_batch_properties_clone(device_type):
     t = ndd.tensor(np.array([1, 2, 3], dtype=np.uint8))
@@ -184,6 +210,7 @@ def test_batch_properties_clone(device_type):
     assert b.shape == [(3,)]
 
 
+@eval_modes()
 def test_batch_subscript_broadcast():
     b = ndd.as_batch(
         [
@@ -200,6 +227,7 @@ def test_batch_subscript_broadcast():
     assert asnumpy(b11.tensors[1]) == 11
 
 
+@eval_modes()
 def test_batch_partial_slice():
     b = ndd.as_batch(
         [
@@ -216,6 +244,7 @@ def test_batch_partial_slice():
     assert np.array_equal(asnumpy(b11.tensors[1]), np.array([8, 11], dtype=np.int32))
 
 
+@eval_modes()
 def test_batch_slice():
     b = ndd.as_batch(
         [
@@ -231,6 +260,7 @@ def test_batch_slice():
     assert np.array_equal(asnumpy(sliced.tensors[1]), np.array([[8, 9], [12, 13]], dtype=np.uint16))
 
 
+@eval_modes()
 def test_batch_subscript_per_sample():
     b = ndd.as_batch(
         [
@@ -247,6 +277,7 @@ def test_batch_subscript_per_sample():
     assert asnumpy(b11.tensors[1]) == 9
 
 
+@eval_modes()
 def test_batch_to_gpu():
     input = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
     t_cpu = ndd.tensor(input)
@@ -260,3 +291,98 @@ def test_batch_to_gpu():
     assert b_gpu.ndim == 2
     assert b_gpu.shape == [(2, 3)]
     assert np.array_equal(asnumpy(b_gpu.tensors[0]), input)
+
+
+@eval_modes()
+@attr("multi_gpu")
+def test_cross_device_copy():
+    if _b.GetCUDADeviceCount() < 2:
+        raise SkipTest("At least 2 devices needed for the test")
+    c0 = ndd.as_batch(
+        [
+            ndd.tensor([[1, 2, 3], [4, 5, 6]], dtype=ndd.int32),
+            ndd.tensor([[7, 8, 9, 10], [11, 12, 13, 14]], dtype=ndd.int32),
+        ]
+    )
+    g0 = c0.to_device("gpu:0")
+    g1 = g0.to_device("gpu:1")
+    c1 = g1.cpu()
+    assert batch_equal(asnumpy(c0), asnumpy(c1))
+    g0 = g1.to_device("gpu:0")
+    c0 = g0.cpu()
+    assert batch_equal(asnumpy(c0), asnumpy(c1))
+
+
+@eval_modes()
+@params(("cpu",), ("gpu",))
+def test_batch_from_enum_auto(device_type):
+    for value, type in [
+        (dali.types.INTERP_CUBIC, ndd.InterpType),
+        (dali.types.YCbCr, ndd.ImageType),
+        (dali.types.INT32, ndd.DataType),
+    ]:
+        t = ndd.Batch([value, value], device=device_type)
+        assert t.dtype == type
+        as_int = ndd.batch(t, dtype=ndd.int32, device="cpu")
+        assert as_int.tensors[0].item() == int(value)
+        assert as_int.tensors[1].item() == int(value)
+
+
+@eval_modes()
+@params(("cpu",), ("gpu",))
+def test_batch_from_enum_with_dtype(device_type):
+    for value, type in [
+        (dali.types.INTERP_CUBIC, ndd.InterpType),
+        (dali.types.YCbCr, ndd.ImageType),
+        (dali.types.INT32, ndd.DataType),
+    ]:
+        t = ndd.Batch([value, value], device=device_type, dtype=type)
+        assert t.dtype == type
+        as_int = ndd.batch(t, dtype=ndd.int32, device="cpu")
+        assert as_int.tensors[0].item() == int(value)
+        assert as_int.tensors[1].item() == int(value)
+
+
+@eval_modes()
+@params(("cpu",), ("gpu",))
+def test_batch_from_enum_value_and_dtype(device_type):
+    for value, type in [
+        (dali.types.INTERP_CUBIC, ndd.InterpType),
+        (dali.types.YCbCr, ndd.ImageType),
+        (dali.types.INT32, ndd.DataType),
+    ]:
+        t = ndd.Batch([int(value), int(value)], device=device_type, dtype=type)
+        assert t.dtype == type
+        as_int = ndd.batch(t, dtype=ndd.int32, device="cpu")
+        assert as_int.tensors[0].item() == int(value)
+        assert as_int.tensors[1].item() == int(value)
+
+
+@eval_modes()
+@params(("cpu",), ("gpu",))
+def test_batch_from_tensor_and_layout(device_type):
+    x = np.zeros((4, 100, 100, 3), dtype=np.uint8)
+    b = ndd.batch(x, layout="HWC", device=device_type)
+    assert b.layout == "HWC"
+
+
+@eval_modes()
+@params(("cpu",), ("gpu",))
+def test_layout_change(device_type):
+    x = np.zeros((100, 100, 3), dtype=np.uint8)
+    a = ndd.batch([x] * 3, layout="HWC", device=device_type)
+    b = ndd.batch([x] * 3, device=device_type)
+    c = ndd.as_batch(a, layout="XYZ")
+    d = ndd.as_batch(b, layout="ABC")
+    e = ndd.batch(a, layout="XYZ")
+    f = ndd.batch(b, layout="ABC")
+    assert a.layout == "HWC"
+    assert b.layout is None
+    assert c.layout == "XYZ"
+    assert d.layout == "ABC"
+    assert c.device.device_type == device_type
+    assert d.device.device_type == device_type
+    assert e.layout == "XYZ"
+    assert f.layout == "ABC"
+    assert e.device.device_type == device_type
+    assert f.device.device_type == device_type

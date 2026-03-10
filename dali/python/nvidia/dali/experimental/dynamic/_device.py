@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,19 @@
 
 import nvidia.dali.backend as _backend
 from threading import local
-from typing import Union, Optional
+from typing import NoReturn, TypeAlias, Union
+
+
+try:
+    import torch  # type: ignore
+
+    _TorchDevice: TypeAlias = torch.device  # type: ignore
+except ImportError:
+    # Unfortunately, most type checkers don't execute code so they will pick the first definition
+    # with torch.device being interpreted as 'Unknown' if torch is not installed.
+    _TorchDevice: TypeAlias = NoReturn  # type: ignore
+
+DeviceLike: TypeAlias = Union["Device", str, _TorchDevice]
 
 
 class Device:
@@ -26,7 +38,15 @@ class Device:
 
     _thread_local = local()
 
-    def __init__(self, name: str, device_id: int = None):
+    @staticmethod
+    def _default_device_type():
+        if _backend.GetCUDADeviceCount() > 0:
+            Device._default_device_type = lambda: "gpu"
+        else:
+            Device._default_device_type = lambda: "cpu"
+        return Device._default_device_type()
+
+    def __init__(self, name: str, device_id: int | None = None):
         """
         Initializes the device object with a name and, optionally, device id.
 
@@ -42,6 +62,7 @@ class Device:
         device_id : int, optional
             The optional device ordinal, as used by CUDA runtime API. If not specified and the name
             is "gpu", then current CUDA device will be used.
+            If `name` is "cpu", `device_id` must be `None`.
             This parameter must not be used if the `name` already contains the id.
         """
         device_type, name_device_id = Device._split_device_type_and_id(name)
@@ -78,15 +99,15 @@ class Device:
         return device_type, device_id
 
     @staticmethod
-    def default_device_id(device_type: str) -> int:
+    def default_device_id(device_type: str) -> int | None:
         """
         Returns the default device id for the device type passed as an argument.
 
-        For CPU it's always 0, for GPU it's the current CUDA device.
+        For CPU it's always None, for GPU it's the current CUDA device.
         """
         if device_type == "cpu":
-            return 0
-        elif device_type == "gpu" or device_type == "mixed":  # TODO(michalz): Remove mixed
+            return None
+        elif device_type == "gpu":
             return _backend.GetCUDACurrentDevice()
         else:
             raise ValueError(f"Invalid device type: {device_type}")
@@ -95,16 +116,22 @@ class Device:
     def _validate_device_id(device_id: int, device_type: str):
         if device_id < 0:
             raise ValueError(f"Invalid device id: {device_id}")
-        if device_type == "gpu" or device_type == "mixed":  # TODO(michalz): Remove mixed
+        if device_type == "gpu":
             if device_id >= _backend.GetCUDADeviceCount():
-                raise ValueError(f"Invalid device id: {device_id} for device type: {device_type}")
+                raise ValueError(
+                    f"Invalid device id: {device_id} for device type: {device_type}. "
+                    f"Must be in range [0..{_backend.GetCUDADeviceCount() - 1}]"
+                )
         elif device_type == "cpu":
-            if device_id is not None and device_id != 0:
-                raise ValueError(f"Invalid device id: {device_id} for device type: {device_type}")
+            if device_id is not None:
+                raise ValueError(
+                    f"Invalid device id: {device_id} for device type: {device_type}. "
+                    f"Must be `None`"
+                )
 
     @staticmethod
     def _validate_device_type(device_type: str):
-        if device_type not in ["cpu", "gpu", "mixed"]:  # TODO(michalz): Remove mixed
+        if device_type != "cpu" and device_type != "gpu":
             raise ValueError(f"Invalid device type: {device_type}")
 
     @staticmethod
@@ -126,16 +153,24 @@ class Device:
         Creates a :class:`Device` object form a DLPack device descriptor.
         """
         dev_type, dev_id = dlpack_device.__dlpack_device__()
+        if int(dev_type) == 1:  # CPU
+            dev_id = None
         return Device(Device.type_from_dlpack(dev_type), dev_id)
 
     def __str__(self):
         """
         Returns the device name, in a format that can be passed to `Device` constructor.
         """
-        return f"{self.device_type}:{self.device_id}"
+        if self.device_id is not None:
+            return f"{self.device_type}:{self.device_id}"
+        else:
+            return self.device_type
 
     def __repr__(self):
-        return f"Device(device_type={self.device_type}, device_id={self.device_id})"
+        if self.device_id is not None:
+            return f"Device(device_type={repr(self.device_type)}, device_id={self.device_id})"
+        else:
+            return f"Device(device_type={repr(self.device_type)})"
 
     def __eq__(self, other):
         return self.device_type == other.device_type and self.device_id == other.device_id
@@ -147,14 +182,14 @@ class Device:
         return hash((self.device_type, self.device_id))
 
     @staticmethod
-    def current():
+    def current() -> "Device":
         """
         Returns the device on top of the thread-local device stack.
 
         If the stack is empty, returns the default GPU for the calling thread.
         """
-        if not Device._thread_local.devices:
-            return Device("gpu")
+        if not getattr(Device._thread_local, "devices", None):
+            return Device(Device._default_device_type())
         return Device._thread_local.devices[-1]
 
     def __enter__(self):
@@ -163,12 +198,12 @@ class Device:
         If the device is GPU, then it sets the current CUDA device to the one identified
         by device_id. If the device is CPU, then it does nothing.
         """
-        if self.device_type == "gpu" or self.device_type == "mixed":  # TODO(michalz): Remove mixed
-            if Device._thread_local.previous_device_ids is None:
+        if self.device_type == "gpu":
+            if getattr(Device._thread_local, "previous_device_ids", None) is None:
                 Device._thread_local.previous_device_ids = []
             Device._thread_local.previous_device_ids.append(_backend.GetCUDACurrentDevice())
             _backend.SetCUDACurrentDevice(self.device_id)
-        if Device._thread_local.devices is None:
+        if getattr(Device._thread_local, "devices", None) is None:
             Device._thread_local.devices = []
         Device._thread_local.devices.append(self)
 
@@ -178,7 +213,7 @@ class Device:
         If the device popped is GPU, then it sets the current CUDA device to the one identified
         by device_id. If the device is CPU, then it does nothing.
         """
-        if self.device_type == "gpu" or self.device_type == "mixed":  # TODO(michalz): Remove mixed
+        if self.device_type == "gpu":
             _backend.SetCUDACurrentDevice(Device._thread_local.previous_device_ids.pop())
         Device._thread_local.devices.pop()
         dev = Device.current()
@@ -186,18 +221,12 @@ class Device:
             _backend.SetCUDACurrentDevice(dev.device_id)
 
 
-Device._thread_local.devices = None
-Device._thread_local.previous_device_ids = None
-
-
-def device(
-    obj: Union[Device, str, "torch.device"], id: Optional[int] = None  # noqa: F821
-) -> Device:
+def device(obj: DeviceLike, id: int | None = None) -> Device:
     """
     Returns a Device object from various input types.
 
     - If `obj` is already a `Device`, returns it. In this case, `id` must be `None`.
-    - If `obj` is a `str`, parses it as a device name (e.g., `"gpu"`, `"cpu:0"`, `"cuda:1"`).
+    - If `obj` is a `str`, parses it as a device name (e.g., `"gpu:0"`, `"cpu"`, `"cuda:1"`).
         In this case, `id` can be specified.
         Note: If the string already contains a device id and `id` is also provided, a
         `ValueError` is raised.

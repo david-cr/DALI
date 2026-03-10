@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2019-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -148,7 +148,7 @@ def test_transfer_cpu_gpu():
 
 
 def check_array_types(t):
-    arr = np.array([[-0.39, 1.5], [-1.5, 0.33]], dtype=t)
+    arr = np.array([[-0.39, 1.5], [-1.5, 0.33]], dtype=float).astype(t)
     tensor = TensorCPU(arr, "HW")
     assert np.allclose(np.array(arr), np.asanyarray(tensor))
 
@@ -329,7 +329,7 @@ def test_tensorlist_dtype():
 
 def _expected_tensorlist_str(device, data, dtype, num_samples, shape, layout=None):
     return "\n    ".join(
-        [f"TensorList{device.upper()}(", f"{data},", f"dtype={dtype},"]
+        [f"TensorList{device.upper()}(", f"{data},", f"dtype={dtype},", f'device="{device}",']
         + ([f"layout={layout}"] if layout is not None else [])
         + [f"num_samples={num_samples},", f"shape={shape})"]
     )
@@ -337,9 +337,9 @@ def _expected_tensorlist_str(device, data, dtype, num_samples, shape, layout=Non
 
 def _expected_tensor_str(device, data, dtype, shape, layout=None):
     return "\n    ".join(
-        [f"Tensor{device.upper()}(", f"{data},", f"dtype={dtype},"]
+        [f"Tensor{device.upper()}(", f"{data},", f"dtype={dtype},", f'device="{device}",']
         + ([f"layout={layout}"] if layout is not None else [])
-        + [f"shape={shape})"]
+        + [f"shape={tuple(shape)})"]
     )
 
 
@@ -357,7 +357,7 @@ def test_tensorlist_str_empty():
 def test_tensorlist_str_scalars():
     arr = np.arange(10)
     tl = TensorListCPU(arr)
-    params = [arr, "DALIDataType.INT64", 10, "[(), (), (), (), (), (), (), (), (), ()]"]
+    params = [str(arr.tolist()), "DALIDataType.INT64", 10, f"[{', '.join(['()'] * 10)}]"]
     _test_str(tl, params, _expected_tensorlist_str)
 
 
@@ -425,7 +425,7 @@ def test_schema_is_stateful():
     assert get_schema(fn.readers.tfrecord).IsStateful()
     # Generic processing operators
     assert not get_schema(fn.resize).IsStateful()
-    assert not get_schema(fn.tensor_subscript).IsStateful()
+    assert not get_schema(fn._tensor_subscript).IsStateful()
     assert not get_schema(fn.slice).IsStateful()
     assert not get_schema(fn.decoders.image).IsStateful()
 
@@ -519,3 +519,32 @@ def test_reinterpret_tensor_list(TensorListType):
         t.reinterpret(types.UINT16)
     with assert_raises(Exception, glob="*different*size*"):
         t.reinterpret(types.FLOAT64)
+
+
+@params(
+    (TensorCPU, TensorListCPU, True),
+    (TensorGPU, TensorListGPU, True),
+    (TensorCPU, TensorListCPU, False),
+    (TensorGPU, TensorListGPU, False),
+)
+def test_tl_from_list_of_tensors(TensorType, TensorListType, contiguous):
+    t0 = TensorCPU(np.array([[1, 2, 3], [4, 5, 6]], np.int32), layout="AB")
+    t1 = TensorCPU(np.array([[10, 20, 30], [40, 50, 60]], np.int32), layout="AB")
+    if TensorType is TensorGPU:
+        t0 = t0._as_gpu()
+        t1 = t1._as_gpu()
+    if not contiguous:
+        kwargs = {"contiguous": False}
+    else:
+        kwargs = {}  # contiguous is True by default
+    tl = TensorListType([t0, t1], **kwargs)
+    assert tl.shape() == [(2, 3), (2, 3)]
+    assert tl.layout() == "AB"
+    assert tl.dtype == types.INT32
+    if TensorType is TensorGPU:
+        assert tl.device_id() == 0
+
+    if contiguous:
+        assert tl.data_ptr() != t0.data_ptr()
+    else:
+        assert tl[0].data_ptr() == t0.data_ptr()

@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2019-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -127,7 +127,7 @@ Otherwise, the threads can be reassigned to any CPU core by the operating system
 
 If True, the operator will be split into two sub-stages: a CPU and GPU one.)code",
       false)
-  .DeprecateArg("split_stages")  // deprecated in DALI 1.0
+  .DeprecateArg("split_stages", "1.0")
   .AddOptionalArg("use_chunk_allocator",
       R"code(**Experimental**, applies **only** to the ``mixed`` backend type.
 
@@ -135,7 +135,7 @@ Uses the chunk pinned memory allocator and allocates a chunk of the
 ``batch_size * prefetch_queue_depth`` size during the construction and suballocates
 them at runtime.)code",
       false)
-  .DeprecateArg("use_chunk_allocator")  // deprecated in DALI 1.0
+  .DeprecateArg("use_chunk_allocator", "1.0")
   .AddOptionalArg("use_fast_idct",
       R"code(Enables fast IDCT in the libjpeg-turbo based CPU decoder, used when `device` is set
 to "cpu" or when the it is set to "mixed" but the particular image can not be handled by
@@ -319,12 +319,13 @@ DALI_SCHEMA(ImageDecoder)
     .NumInput(1)
     .NumOutput(1)
     .AddParent("decoders__Image")
-    .MakeDocPartiallyHidden()
+    .MakeDocHidden()
     .Deprecate(
+        "1.0",
         "decoders__Image",
         R"code(In DALI 1.0 all decoders were moved into a dedicated :mod:`~nvidia.dali.fn.decoders`
 submodule and renamed to follow a common pattern. This is a placeholder operator with identical
-functionality to allow for backward compatibility.)code");  // Deprecated in 1.0
+functionality to allow for backward compatibility.)code");
 
 // Fused
 
@@ -333,24 +334,26 @@ DALI_SCHEMA(ImageDecoderCrop)
     .NumInput(1)
     .NumOutput(1)
     .AddParent("decoders__ImageCrop")
-    .MakeDocPartiallyHidden()
+    .MakeDocHidden()
     .Deprecate(
+        "1.0",
         "decoders__ImageCrop",
         R"code(In DALI 1.0 all decoders were moved into a dedicated :mod:`~nvidia.dali.fn.decoders`
 submodule and renamed to follow a common pattern. This is a placeholder operator with identical
-functionality to allow for backward compatibility.)code");  // Deprecated in 1.0
+functionality to allow for backward compatibility.)code");
 
 DALI_SCHEMA(ImageDecoderRandomCrop)
     .DocStr("Legacy alias for :meth:`decoders.image_random_crop`.")
     .NumInput(1)
     .NumOutput(1)
     .AddParent("decoders__ImageRandomCrop")
-    .MakeDocPartiallyHidden()
+    .MakeDocHidden()
     .Deprecate(
+        "1.0",
         "decoders__ImageRandomCrop",
         R"code(In DALI 1.0 all decoders were moved into a dedicated :mod:`~nvidia.dali.fn.decoders`
 submodule and renamed to follow a common pattern. This is a placeholder operator with identical
-functionality to allow for backward compatibility.)code");  // Deprecated in 1.0
+functionality to allow for backward compatibility.)code");
 
 
 DALI_SCHEMA(ImageDecoderSlice)
@@ -358,11 +361,12 @@ DALI_SCHEMA(ImageDecoderSlice)
     .NumInput(1, 3)
     .NumOutput(1)
     .AddParent("decoders__ImageSlice")
-    .MakeDocPartiallyHidden()
+    .MakeDocHidden()
     .Deprecate(
+        "1.0",
         "decoders__ImageSlice",
         R"code(In DALI 1.0 all decoders were moved into a dedicated :mod:`~nvidia.dali.fn.decoders`
 submodule and renamed to follow a common pattern. This is a placeholder operator with identical
-functionality to allow for backward compatibility.)code");  // Deprecated in 1.0
+functionality to allow for backward compatibility.)code");
 
 }  // namespace dali

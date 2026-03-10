@@ -2,7 +2,7 @@ API Reference
 =============
 
 .. currentmodule:: nvidia.dali.experimental.dynamic
-    
+
 This page documents the public API of DALI Dynamic.
 For the list of all available operators, see :doc:`Operation Reference <ops_reference>`.
 
@@ -35,6 +35,32 @@ as_batch
 ^^^^^^^^
 .. autofunction:: as_batch
 
+Data types
+----------
+
+These are the data type objects that DALI Dynamic uses to indicate the type of elements of Tensors and Batches.
+They are typically passed as ``dtype`` argument to request specific type of the tensor element.
+There are also several DALI-specific types, representing DALI enums.
+
+All of the types below are instances of the :py:class:`DType` class.
+
+.. include:: operations/types_table
+
+Type conversion functions
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autofunction:: dtype
+
+.. autofunction:: type_id
+
+DType class
+^^^^^^^^^^^
+
+.. currentmodule:: nvidia.dali.experimental.dynamic
+
+.. autoclass:: DType
+   :members: bits, bytes, exponent_bits, kind, name, significand_bits, type_id, from_fw_type, from_type_id, parse, Kind
+
 Execution context
 -----------------
 
@@ -52,6 +78,42 @@ EvalMode
 ^^^^^^^^
 .. autoclass:: EvalMode
    :members:
+
+get_num_threads
+^^^^^^^^^^^^^^^
+.. autofunction:: get_num_threads
+
+set_num_threads
+^^^^^^^^^^^^^^^
+.. autofunction:: set_num_threads
+
+CUDA streams
+------------
+
+Stream
+^^^^^^
+.. autoclass:: Stream
+   :members:
+
+stream
+^^^^^^
+.. autofunction:: stream
+
+get_default_stream
+^^^^^^^^^^^^^^^^^^
+.. autofunction:: get_default_stream
+
+set_default_stream
+^^^^^^^^^^^^^^^^^^
+.. autofunction:: set_default_stream
+
+get_current_stream
+^^^^^^^^^^^^^^^^^^
+.. autofunction:: get_current_stream
+
+set_current_stream
+^^^^^^^^^^^^^^^^^^
+.. autofunction:: set_current_stream
 
 Random state
 ------------

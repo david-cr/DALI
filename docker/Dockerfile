@@ -13,14 +13,44 @@ ENV PYVER=${PYVER} \
     PYTHONPATH=/opt/python/v \
     PYBIN=${PYTHONPATH}/bin \
     PYLIB=${PYTHONPATH}/lib \
-    PATH=/opt/python/cp${PYV}-cp${PYV}/bin:/opt/python/cp39-cp39/bin:${PYBIN}:/opt/python/cp310-cp310/bin:/opt/python/cp311-cp311/bin:${PYBIN}:/opt/python/cp312-cp312/bin:/opt/python/cp313-cp313/bin:${PYBIN}:${PATH} \
-    LD_LIBRARY_PATH=/opt/python/cp${PYV}-cp${PYV}/lib:/usr/local/lib:/opt/dali/${DALI_BUILD_DIR}:/opt/python/cp39-cp39/lib:/opt/python/cp310-cp310/lib:/opt/python/cp311-cp311/lib:/opt/python/cp312-cp312/lib:/opt/python/cp313-cp313/lib:${PYLIB}:${LD_LIBRARY_PATH} \
-    LIBRARY_PATH=/opt/python/cp${PYV}-cp${PYV}/lib:/usr/local/lib:/opt/dali/${DALI_BUILD_DIR}:/opt/python/cp39-cp39/lib:/opt/python/cp310-cp310/lib:/opt/python/cp311-cp311/lib:/opt/python/cp312-cp312/lib:/opt/python/cp313-cp313/lib:${PYLIB}:${LIBRARY_PATH}
+    PATH=/opt/python/cp${PYV}-cp${PYV}/bin:\
+/opt/python/cp310-cp310/bin:\
+/opt/python/cp311-cp311/bin:\
+/opt/python/cp312-cp312/bin:\
+/opt/python/cp313-cp313/bin:\
+/opt/python/cp313-cp313t/bin:\
+/opt/python/cp314-cp314/bin:\
+/opt/python/cp314-cp314t/bin:\
+${PYBIN}:\
+${PATH} \
+    LD_LIBRARY_PATH=/opt/python/cp${PYV}-cp${PYV}/lib:\
+/usr/local/lib:/opt/dali/${DALI_BUILD_DIR}:\
+/opt/python/cp310-cp310/lib:\
+/opt/python/cp311-cp311/lib:\
+/opt/python/cp312-cp312/lib:\
+/opt/python/cp313-cp313/lib:\
+/opt/python/cp313-cp313t/lib:\
+/opt/python/cp314-cp314/lib:\
+/opt/python/cp314-cp314t/lib:\
+${PYLIB}:\
+${LD_LIBRARY_PATH} \
+    LIBRARY_PATH=/opt/python/cp${PYV}-cp${PYV}/lib:\
+/usr/local/lib:\
+/opt/dali/${DALI_BUILD_DIR}:\
+/opt/python/cp310-cp310/lib:\
+/opt/python/cp311-cp311/lib:\
+/opt/python/cp312-cp312/lib:\
+/opt/python/cp313-cp313/lib:\
+/opt/python/cp313-cp313t/lib:\
+/opt/python/cp314-cp314/lib:\
+/opt/python/cp314-cp314t/lib:\
+${PYLIB}:\
+${LIBRARY_PATH}
 
 RUN ln -s /opt/python/cp${PYV}* /opt/python/v
 
 # install Python bindings and patch it to use the clang we have here
-RUN pip install future setuptools wheel clang==14.0 flake8 bandit astunparse gast dm-tree "black[jupyter]"==25.11.0 nvtx makefun && \
+RUN pip install future setuptools wheel clang==14.0 flake8 bandit astunparse gast dm-tree "black[jupyter]"==25.12.0 nvtx makefun && \
     PY_CLANG_PATH=$(echo $(pip show clang) | sed 's/.*Location: \(.*\) Requires.*/\1/')/clang/cindex.py && \
     LIBCLANG_PATH=/usr/lib64/libclang.so && \
     sed -i "s|library_file = None|library_file = \"${LIBCLANG_PATH}\"|" ${PY_CLANG_PATH} && \

@@ -26,6 +26,7 @@ from collections.abc import Iterable
 from nose_utils import attr, nottest, assert_raises
 from nvidia.dali.pipeline import Pipeline, pipeline_def
 from nvidia.dali.pipeline.experimental import pipeline_def as experimental_pipeline_def
+
 from nvidia.dali.plugin.numba.fn.experimental import numba_function
 
 from segmentation_test_utils import make_batch_select_masks
@@ -244,6 +245,10 @@ def test_cast_cpu():
     check_single_input(fn.cast, dtype=types.INT32)
 
 
+def test_clahe_cpu():
+    check_single_input(fn.clahe, tiles_x=4, tiles_y=4, clip_limit=2.0, device="cpu")
+
+
 def test_cast_like_cpu():
     pipe = Pipeline(batch_size=batch_size, num_threads=3, device_id=None)
     out = fn.cast_like(np.array([1, 2, 3], dtype=np.int32), np.array([1.0], dtype=np.float32))
@@ -257,7 +262,7 @@ def test_resize_cpu():
 
 
 def test_tensor_resize_cpu():
-    check_single_input(fn.experimental.tensor_resize, sizes=[50, 50], axes=[0, 1])
+    check_single_input(fn.tensor_resize, sizes=[50, 50], axes=[0, 1])
 
 
 def test_per_frame_cpu():
@@ -659,7 +664,11 @@ def test_lookup_table_cpu():
         return out
 
     check_single_input(
-        fn.lookup_table, keys=[1, 3], values=[10, 50], get_data=get_data, input_layout=None
+        fn.lookup_table,
+        keys=[1, 3],
+        values=[10, 50],
+        get_data=get_data,
+        input_layout=None,
     )
 
 
@@ -837,7 +846,10 @@ def test_nemo_asr_reader_cpu():
 
 def test_video_reader():
     check_no_input(
-        fn.experimental.readers.video, filenames=video_files, labels=[0, 1], sequence_length=10
+        fn.experimental.readers.video,
+        filenames=video_files,
+        labels=[0, 1],
+        sequence_length=10,
     )
 
 
@@ -985,7 +997,10 @@ def test_sequence_rearrange_cpu():
         return out
 
     check_single_input(
-        fn.sequence_rearrange, new_order=[0, 4, 1, 3, 2], get_data=get_data, input_layout="FHWC"
+        fn.sequence_rearrange,
+        new_order=[0, 4, 1, 3, 2],
+        get_data=get_data,
+        input_layout="FHWC",
     )
 
 
@@ -1033,7 +1048,11 @@ def test_python_function_cpu():
         return np.array(Image.fromarray(image).resize((50, 10)))
 
     pipe = Pipeline(  # noqa: F841
-        batch_size=batch_size, num_threads=4, device_id=None, exec_async=False, exec_pipelined=False
+        batch_size=batch_size,
+        num_threads=4,
+        device_id=None,
+        exec_async=False,
+        exec_pipelined=False,
     )
     check_single_input(fn.python_function, function=resize, exec_async=False, exec_pipelined=False)
 
@@ -1048,7 +1067,11 @@ def test_dump_image_cpu():
 
 def test_sequence_reader_cpu():
     check_no_input(
-        fn.readers.sequence, file_root=sequence_dir, sequence_length=2, shard_id=0, num_shards=1
+        fn.readers.sequence,
+        file_root=sequence_dir,
+        sequence_length=2,
+        shard_id=0,
+        num_shards=1,
     )
 
 
@@ -1112,7 +1135,10 @@ def test_segmentation_select_masks():
             num_outputs=3,
             device="cpu",
             source=get_data_source(
-                batch_size, vertex_ndim=2, npolygons_range=(1, 5), nvertices_range=(3, 10)
+                batch_size,
+                vertex_ndim=2,
+                npolygons_range=(1, 5),
+                nvertices_range=(3, 10),
             ),
         )
         out_polygons, out_vertices = fn.segmentation.select_masks(
@@ -1296,7 +1322,7 @@ def test_tensor_subscript():
 
 
 def test_subscript_dim_check():
-    check_single_input(fn.subscript_dim_check, num_subscripts=3)
+    check_single_input(fn._subscript_dim_check, num_subscripts=3)
 
 
 def test_get_property():
@@ -1426,7 +1452,7 @@ def test_io_file_read_cpu():
 
 def test_debayer():
     check_single_input(
-        fn.experimental.debayer,
+        fn.debayer,
         get_data=lambda: np.full((256, 256), 128, dtype=np.uint8),
         batch=False,
         input_layout="HW",
@@ -1455,6 +1481,7 @@ tested_methods = [
     "decoders.image_random_crop",
     "decoders.numpy",
     "experimental.debayer",
+    "debayer",
     "experimental.decoders.image",
     "experimental.decoders.image_crop",
     "experimental.decoders.image_slice",
@@ -1526,6 +1553,7 @@ tested_methods = [
     "cast_like",
     "resize",
     "experimental.tensor_resize",
+    "tensor_resize",
     "gaussian_blur",
     "laplacian",
     "crop_mirror_normalize",
@@ -1584,8 +1612,8 @@ tested_methods = [
     "multi_paste",
     "roi_random_crop",
     "segmentation.random_object_bbox",
-    "tensor_subscript",
-    "subscript_dim_check",
+    "_tensor_subscript",
+    "_subscript_dim_check",
     "math.ceil",
     "math.clamp",
     "math.tanh",
@@ -1619,7 +1647,9 @@ tested_methods = [
     "dl_tensor_python_function",
     "experimental.warp_perspective",
     "audio_resample",
+    "experimental.decoders.hidden.video",
     "experimental.decoders.video",
+    "decoders.video",
     "zeros",
     "zeros_like",
     "ones",
@@ -1627,11 +1657,14 @@ tested_methods = [
     "full",
     "full_like",
     "io.file.read",
+    "clahe",
 ]
 
 excluded_methods = [
     "hidden.*",
+    "experimental.hidden.*",
     "_conditional.hidden.*",
+    "readers.hidden.*",
     "jitter",  # not supported for CPU
     "video_reader",  # not supported for CPU
     "video_reader_resize",  # not supported for CPU
@@ -1640,7 +1673,10 @@ excluded_methods = [
     "optical_flow",  # not supported for CPU
     "experimental.audio_resample",  # Alias of audio_resample (already tested)
     "experimental.equalize",  # not supported for CPU
+    "equalize",  # not supported for CPU
     "experimental.filter",  # not supported for CPU
+    "filter",  # not supported for CPU
+    "decoders.inflate",  # not supported for CPU
     "experimental.inflate",  # not supported for CPU
     "experimental.remap",  # operator is GPU-only
     "experimental.readers.fits",  # lacking test files in DALI_EXTRA

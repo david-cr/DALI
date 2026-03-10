@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
-from ._eval_context import EvalContext as _EvalContext
-from ._type import DType
+import threading
+from typing import TYPE_CHECKING, Any, Optional
+
 import nvtx
+
+from ._async import _Future
+from ._device import Device
+from ._eval_context import EvalContext as _EvalContext
+from ._eval_mode import EvalMode as _EvalMode
+from ._exceptions import capture_stack, rethrow_exception
+from ._type import DType
+from nvidia.dali import backend as _b
+
+if TYPE_CHECKING:
+    from .ops import Operator
 
 
 class Invocation:
@@ -27,18 +38,19 @@ class Invocation:
     lazy evaluation of stateful operators or operators with side-effects.
 
     NOTE:  This class is not thread safe. Subsequent invocations of the same operator instance
-           must be synhchronized by the caller.
+           must be synchronized by the caller.
     """
 
     def __init__(
         self,
-        operator_instance,
-        call_id,
-        inputs=[],
-        args={},
+        operator_instance: "Operator",
+        call_id: Optional[int],
+        inputs: list[Any] | None = None,
+        args: dict[str, Any] | None = None,
         is_batch: bool = False,
         batch_size: Optional[int] = None,
         previous_invocation: Optional["Invocation"] = None,
+        caller_depth: int = 4,
     ):
         """
         Parameters
@@ -61,22 +73,41 @@ class Invocation:
             the batch size.
         previous_invocation : Invocation
             The previous invocation of the same operator. Used by stateful operators.
+        caller_depth : int
+            Depth of the initial caller. Used to capture the call stacks for error reporting.
         """
         self._operator = operator_instance
         self._call_id = call_id
-        self._inputs = inputs
-        self._args = args
+        self._inputs = inputs or []
+        self._args = args or {}
         self._is_batch = is_batch
-        self._results = None
+        self._results: tuple[Any] | None = None
         self._batch_size = batch_size
-        self._num_outputs = None
-        self._output_devices = None
+        self._num_outputs: int | None = None
+        self._output_devices: list[Device] | None = None
         self._previous_invocation = previous_invocation
-        self._eval_context = _EvalContext.current()
+        self._eval_context = _EvalContext.current()._snapshot()
+        self._eval_mode: _EvalMode | None = None
+        self._future: Optional[_Future] = None
+        self._run_lock = threading.Lock()
+        self._call_stack = (
+            capture_stack(caller_depth + 1)
+            if _EvalMode.current().value <= _EvalMode.eager.value
+            else None
+        )
+
+    def __del__(self):
+        self._return_op_to_cache()
+
+    def _return_op_to_cache(self):
+        if (cache := getattr(self._operator, "_cache", None)) is not None:
+            cache[self._operator._key] = self._operator
+        self._operator = None
+        self._return_op_to_cache = lambda: None
 
     def device(self, result_index: int):
         if self._output_devices is None:
-            self._output_devices = self._operator.infer_output_devices(*self._inputs, **self._args)
+            self._output_devices = self._operator._infer_output_devices(*self._inputs, **self._args)
         return self._output_devices[result_index]
 
     def ndim(self, result_index: int) -> int:
@@ -115,25 +146,109 @@ class Invocation:
             self.run(self._eval_context)
         return self._results[result_index].layout()
 
+    def __iter__(self):
+        for index in range(len(self)):
+            yield InvocationResult(self, index)
+
     def __getitem__(self, index):
         """
         Returns a proxy to the index-th result of the invocation.
         """
         return InvocationResult(self, index)
 
-    def __len__(self):
+    def __len__(self) -> int:
         if self._num_outputs is None:
-            self._num_outputs = self._operator.infer_num_outputs(*self._inputs, **self._args)
-        return self._num_outputs
+            self._num_outputs = self._operator._infer_num_outputs(*self._inputs, **self._args)
+        return self._num_outputs  # type: ignore
 
     @property
     def is_batch(self):
         return self._is_batch
 
+    def apply_eval_policy(
+        self,
+        has_external_inputs: bool,
+        mode: Optional[_EvalMode] = None,
+        ctx: Optional[_EvalContext] = None,
+    ):
+        """Optionally schedules or runs the operator, depending on the evaluation mode and whether
+        there are any external inputs.
+
+        If there are any external inputs, the operator is run immediately, regardless of EvalMode.
+        """
+        if mode is None:
+            mode = _EvalMode.current()
+
+        if has_external_inputs:
+            self.run(ctx)
+        elif mode.value >= _EvalMode.sync_cpu.value:
+            self.run(ctx)
+        elif mode.value >= _EvalMode.eager.value:
+            self.schedule(ctx)
+        # else - deferred evaluation
+
+        if not has_external_inputs:
+            self._eval_mode = mode
+
+        if mode is _EvalMode.sync_full:
+            stream = ctx.cuda_stream if ctx is not None else _EvalContext.current().cuda_stream
+            if stream is not None:  # If the stream is None, there's no GPU
+                stream.synchronize()
+
     def run(self, ctx: Optional[_EvalContext] = None):
-        ctx = self._eval_context if ctx is None else ctx
+        """Executes the operator immediately."""
+        if future := self._future:
+            with nvtx.annotate("Invocation.wait", domain="invocation"):
+                future.wait()
+            self._future = None
+        else:
+            ctx = self._eval_context if ctx is None else ctx
+            try:
+                # We don't want to run from two threads
+                with self._run_lock:
+                    self._run_impl(ctx)
+            except Exception as exception:
+                if self._call_stack is not None and self._eval_mode is not None:
+                    rethrow_exception(exception, self._call_stack, self._eval_mode)
+                raise
+
+    def schedule(self, ctx: Optional[_EvalContext] = None):
+        """Schedule the asynchronous execution of the operator"""
+
+        # Note: this function can only be called once, soon after the instance creation
+        # so we don't have to worry about thread-safety
+
+        if self._results is not None or self._future is not None:
+            return
+
+        eval_context = self._eval_context if ctx is None else ctx
+        # If we're already in the background thread, submitting the task
+        # to the async executor creates a deadlock so we run it directly.
+        if eval_context._is_in_background_thread():
+            self._run_impl(eval_context)
+            return
+
+        eval_mode = _EvalMode.current()
+        device = Device.current()
+
+        def _run():
+            # Forward thread-local context to the new thread
+            with eval_context, eval_mode, device:
+                self._run_impl(eval_context)
+
+        # Call _init_spec early to prevent a race condition
+        if init_spec := getattr(self._operator, "_init_spec", None):
+            init_spec(self._inputs, self._args)
+
+        assert self._call_stack is not None
+        self._future = eval_context._async_executor.submit(_run, self._call_stack)
+
+    def _run_impl(self, ctx: _EvalContext):
+        """Run the operator and store the result in self._results"""
+
         if self._results is not None:
             return
+
         with nvtx.annotate("Invocation.run", domain="invocation"):
             # If the invocation was created with a GPU device, validate that
             # the evaluation context matches.
@@ -159,18 +274,38 @@ class Invocation:
             # if cached is not None:
             #     self._results = cached
             # else:
-            r = self._operator.run(
+            r = self._operator._run(
                 ctx,
                 *self._inputs,
                 batch_size=self._batch_size if self._is_batch else None,
                 **self._args,
             )
-            if isinstance(r, tuple) or isinstance(r, list):
+            if isinstance(r, (tuple, list)):
                 self._results = tuple(r)
+            elif isinstance(r, dict):
+                self._results = tuple(r.values())
             else:
                 self._results = (r,)
-            self._results = tuple(self._results)
+
+            if self._num_outputs is None:
+                self._num_outputs = len(self._results)
+            else:
+                assert self._num_outputs == len(self._results)
+
+            def output_device(x):
+                if isinstance(x, (_b.TensorGPU, _b.TensorListGPU)):
+                    return Device("gpu", x.device_id())
+                else:
+                    return Device("cpu")
+
+            if self._output_devices is None:
+                self._output_devices = [output_device(r) for r in self._results]
+            else:
+                for i, d in enumerate(self._output_devices):
+                    assert output_device(self._results[i]) == d
+
             ctx.cache_results(self, self._results)
+            self._return_op_to_cache()  # the operator instance is ready for a new invocation
 
     def values(self, ctx: Optional[_EvalContext] = None):
         """

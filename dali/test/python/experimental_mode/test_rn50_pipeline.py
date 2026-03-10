@@ -1,3 +1,17 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import nvidia.dali.experimental.dynamic as ndd
 import nvidia.dali as dali
 import nvidia.dali.fn as fn
@@ -14,11 +28,11 @@ rng_copy = rng.clone()
 
 def ndd_rn50_pipeline(jpegs):
     batch_size = jpegs.batch_size
-    images = ndd.decoders.image(jpegs, device="mixed")
+    images = ndd.decoders.image(jpegs, device="gpu")
     xy = ndd.random.uniform(batch_size=batch_size, range=[0, 1], shape=2, rng=rng_copy)
     do_mirror = ndd.random.coin_flip(batch_size=batch_size, probability=0.5, rng=rng_copy)
     size = ndd.random.uniform(batch_size=batch_size, range=[256, 480], rng=rng_copy)
-    resized_images = ndd.fast_resize_crop_mirror(
+    resized_images = ndd.resize_crop_mirror(
         images,
         crop=[224, 224],
         crop_pos_x=xy.slice[0],
@@ -26,6 +40,7 @@ def ndd_rn50_pipeline(jpegs):
         mirror=do_mirror,
         resize_shorter=size,
         interp_type=dali.types.INTERP_LANCZOS3,
+        antialias=False,
     )
     output = ndd.crop_mirror_normalize(
         resized_images,
@@ -58,7 +73,7 @@ def rn50_pipeline():
     do_mirror = fn.random.coin_flip(probability=0.5, _random_state=state_2)
     size = fn.random.uniform(range=[256, 480], _random_state=state_3)
     images = fn.decoders.image(jpegs, device="mixed")
-    resized_images = fn.fast_resize_crop_mirror(
+    resized_images = fn.resize_crop_mirror(
         images,
         crop=[224, 224],
         crop_pos_x=xy[0],
@@ -66,6 +81,7 @@ def rn50_pipeline():
         mirror=do_mirror,
         resize_shorter=size,
         interp_type=dali.types.DALIInterpType.INTERP_LANCZOS3,
+        antialias=False,
     )
     output = fn.crop_mirror_normalize(
         resized_images,

@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,24 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional, Union, Sequence
-from ._type import DType, dtype as _dtype
-from ._tensor import (
-    Tensor,
-    _is_full_slice,
-    _try_convert_enums,
-    tensor as _tensor,
-    as_tensor as _as_tensor,
-)
+import importlib.util
+from typing import Any
+from collections.abc import Iterator
+
 import nvidia.dali.backend as _backend
 import nvidia.dali.types as _dali_types
-from ._device import Device, device as _device
-from . import _eval_mode
-from . import _invocation
+import nvidia.dali._tensor_formatting as _tensor_formatting
 import nvtx
+from nvidia.dali._typing import BatchLike, TensorLike
+
+from . import _eval_mode, _invocation
+from ._arithmetic import _arithm_op
+from ._device import Device, DeviceLike
+from ._device import device as _device
+from ._tensor import Tensor, _is_full_slice, _try_convert_enums
+from ._tensor import as_tensor as _as_tensor
+from ._tensor import tensor as _tensor
+from ._type import DType, DTypeLike
+from ._type import dtype as _dtype
 
 
-def _backend_device(backend: Union[_backend.TensorListCPU, _backend.TensorListGPU]) -> Device:
+def _backend_device(backend: _backend.TensorListCPU | _backend.TensorListGPU) -> Device:
     if isinstance(backend, _backend.TensorListCPU):
         return Device("cpu")
     elif isinstance(backend, _backend.TensorListGPU):
@@ -92,39 +96,9 @@ class BatchedSlice:
                 args[f"at_{d}"] = r
                 d += 1
 
-        from . import tensor_subscript
+        from . import _tensor_subscript
 
-        return tensor_subscript(self._batch, **args)
-
-
-def _arithm_op(name, *args, **kwargs):
-    from . import arithmetic_generic_op
-
-    argsstr = " ".join(f"&{i}" for i in range(len(args)))
-    gpu = False
-    new_args = [None] * len(args)
-    for i, a in enumerate(args):
-        if isinstance(a, (Batch, Tensor)):
-            if a.device.device_type == "gpu":
-                gpu = True
-        else:
-            # TODO(michalz): We might use some caching here for common values.
-            if new_args is None:
-                new_args = list(args)
-            if gpu:
-                new_args[i] = _as_tensor(a, device="gpu")
-            else:
-                new_args[i] = _as_tensor(a)
-                if new_args[i].device.device_type == "gpu":
-                    gpu = True
-
-    for i in range(len(args)):
-        if new_args[i] is None:
-            if (args[i].device.device_type == "gpu") != gpu:
-                raise ValueError("Cannot mix GPU and CPU inputs.")
-            new_args[i] = args[i]
-
-    return arithmetic_generic_op(*new_args, expression_desc=f"{name}({argsstr})")
+        return _tensor_subscript(self._batch, **args)
 
 
 class _TensorList:
@@ -140,11 +114,11 @@ class _TensorList:
     # populate it - and even worse, we'd have to copy it each time, because otherwise a user
     # could try something like `batch.tensors.append(T)` which would make the list inconsistent.
 
-    def __init__(self, batch: "Batch", indices: Optional[Union[list[int], range]] = None):
+    def __init__(self, batch: "Batch", indices: list[int] | range | None = None):
         self._batch = batch
         self._indices = indices or range(batch.batch_size)
 
-    def __getitem__(self, selection: Union[int, slice, list[int]]):
+    def __getitem__(self, selection: int | slice | list[int]):
         return self.select(selection)
 
     def __len__(self):
@@ -173,7 +147,7 @@ class _TensorList:
         """
         Converts the list of tensors to a :class:`Batch` object.
         """
-        return batch(self) if copy else as_batch(self)
+        return batch(self) if copy else as_batch(self)  # type: ignore
 
 
 class Batch:
@@ -194,11 +168,11 @@ class Batch:
 
     def __init__(
         self,
-        tensors: Optional[Any] = None,
-        dtype: Optional[DType] = None,
-        device: Optional[Device] = None,
-        layout: Optional[str] = None,
-        invocation_result: Optional[_invocation.InvocationResult] = None,
+        tensors: BatchLike | None = None,
+        dtype: DTypeLike | None = None,
+        device: DeviceLike | None = None,
+        layout: str | None = None,
+        invocation_result: _invocation.InvocationResult | None = None,
         copy: bool = False,
     ):
         """Constructs a :class:`Batch` object.
@@ -221,7 +195,7 @@ class Batch:
 
             - a list of tensor-like objects; the objects need to have matching number of dimensions,
             data types and layouts,
-            - a tensor-like object; the outermost dimenion is interpreted as the batch dimension
+            - a tensor-like object; the outermost dimension is interpreted as the batch dimension
             - a dali.backend.TensorListCPU or dali.backend.TensorListGPU
         dtype : DType, default: None
             The desired data type of the batch. If not specified, the data type is inferred
@@ -251,6 +225,10 @@ class Batch:
         self._device = None
         self._invocation_result = None  # The result of a DALI operator invocation.
         copied = False
+
+        if dtype is not None and not isinstance(dtype, DType):
+            dtype = _dtype(dtype)
+
         if tensors is not None:
             if isinstance(tensors, (_backend.TensorListCPU, _backend.TensorListGPU)):
                 backend_dev = _backend_device(tensors)
@@ -277,10 +255,11 @@ class Batch:
                     if self._storage and layout:
                         self._storage.set_layout(layout)
             elif _is_tensor_type(tensors):
+                batch_layout = "N" + layout if layout else None
                 if copy:
-                    t = _tensor(tensors, dtype=dtype, device=device, layout=layout)
+                    t = _tensor(tensors, dtype=dtype, device=device, layout=batch_layout)
                 else:
-                    t = _as_tensor(tensors, dtype=dtype, device=device, layout=layout)
+                    t = _as_tensor(tensors, dtype=dtype, device=device, layout=batch_layout)
                 if t.ndim == 0:
                     raise ValueError("Cannot create a batch from a scalar")
                 if dtype is None:
@@ -296,11 +275,10 @@ class Batch:
                         self._storage = _backend.TensorListGPU(t._storage, layout=layout)
                     else:
                         raise ValueError(f"Unsupported device type: {t.device.device_type}")
-                    if t._wraps_external_data:
-                        self._wraps_external_data = True
                 else:
-                    sh = t.shape
-                    tensors = [t[i] for i in range(sh[0])]
+                    self._tensors = [t[i] for i in range(t.shape[0])]
+
+                self._wraps_external_data = t._wraps_external_data
                 self._dtype = dtype
 
             else:
@@ -382,7 +360,7 @@ class Batch:
 
                 self._assign(cast(self, dtype=dtype, device=device))
 
-        if _eval_mode.EvalMode.current().value >= _eval_mode.EvalMode.eager.value:
+        if _eval_mode.EvalMode.current().value > _eval_mode.EvalMode.eager.value:
             self.evaluate()
 
     def _is_external(self) -> bool:
@@ -390,10 +368,10 @@ class Batch:
 
     @staticmethod
     def broadcast(
-        sample,
+        sample: TensorLike,
         batch_size: int,
-        device: Optional[Device] = None,
-        dtype: Optional[DType] = None,
+        device: DeviceLike | None = None,
+        dtype: DTypeLike | None = None,
     ) -> "Batch":
         """
         Creates a batch by repeating a single `sample` `batch_size` times.
@@ -470,7 +448,7 @@ class Batch:
         return self._device
 
     @property
-    def layout(self) -> str:
+    def layout(self) -> str | None:
         """
         The layout of tensors in the batch.
 
@@ -518,7 +496,7 @@ class Batch:
         """
         return _TensorList(self)
 
-    def to_device(self, device: Device, force_copy: bool = False) -> "Batch":
+    def to_device(self, device: DeviceLike, force_copy: bool = False) -> "Batch":
         """
         Returns the data batch on the specified device.
 
@@ -542,7 +520,7 @@ class Batch:
         """
         return self.to_device(Device("cpu"))
 
-    def gpu(self, index: Optional[int] = None) -> "Batch":
+    def gpu(self, index: int | None = None) -> "Batch":
         """
         Returns the batch on the GPU. If it's already there, this function returns `self`.
 
@@ -590,13 +568,13 @@ class Batch:
         """
         return BatchedSlice(self)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Tensor]:
         """
         Iterates over tensors in the batch.
         """
         return iter(self.tensors)
 
-    def select(self, sample_range):
+    def select(self, sample_range) -> "Batch | Tensor":
         """
         Selects a range of samples.
 
@@ -613,15 +591,21 @@ class Batch:
         else:
             return self._get_tensor(r)
 
-    def _get_tensor(self, i):
+    def _get_tensor(self, i) -> Tensor:
         if self._tensors is None:
-            self._tensors = [None] * self.batch_size
+            self._tensors: list[Tensor | None] = [None] * self.batch_size
 
         t = self._tensors[i]
         if t is None:
-            t = self._tensors[i] = Tensor(batch=self, index_in_batch=i)
+            # Without deferred execution, t.evaluate() requires self._tensors[i] to be assigned
+            # Do assignment and evaluation in two steps
+            with _eval_mode.EvalMode.deferred:
+                t = self._tensors[i] = Tensor(batch=self, index_in_batch=i)
             if self._storage:
                 t._storage = self._storage[i]
+            if _eval_mode.EvalMode.current().value > _eval_mode.EvalMode.eager.value:
+                t.evaluate()
+
         return t
 
     def _plain_slice(self, ranges):
@@ -679,8 +663,35 @@ class Batch:
             assert self._tensors is not None
             return [t.shape for t in self._tensors]
 
-    def __str__(self) -> str:
-        return "Batch(\n" + str(self.evaluate()._storage) + ")"
+    def __repr__(self) -> str:
+        return _tensor_formatting.format_batch(
+            self.evaluate(), show_data=True, adapter=_tensor_formatting.DynamicBatchAdapter()
+        )
+
+    def torch(self, copy: bool | None = None, pad: bool = False):
+        """
+        Returns ``self`` as a PyTorch tensor.
+        Requires ``self`` to be dense and PyTorch to be installed.
+
+        Parameters
+        ----------
+        copy : bool, optional, default: None
+            An optional boolean value indicating how to handle copying.
+            None - avoid copy if possible
+            True - always copy
+            False - raise error if copy cannot be avoided
+
+        pad : bool, default: False
+            If `True`, the tensors in the batch will be padded before being stacked into one tensor.
+            If `False`, an error is raised if the batch has a non-uniform shape.
+        """
+        if importlib.util.find_spec("torch") is None:
+            raise RuntimeError("Batch.torch() requires PyTorch to be installed.")
+
+        if copy is False and not self.evaluate()._storage.is_dense_tensor():
+            raise ValueError("This batch cannot be converted to a tensor without a copy.")
+
+        return _as_tensor(self, pad=pad).torch(copy)
 
     def evaluate(self):
         """
@@ -710,7 +721,9 @@ class Batch:
                             f"Unsupported device type: {self._device.device_type}"
                         )
                     self._storage = backend_type(
-                        [t.evaluate()._storage for t in self._tensors], self.layout
+                        [t.evaluate()._storage for t in self._tensors],
+                        self.layout,
+                        contiguous=False,
                     )
         return self
 
@@ -795,11 +808,11 @@ class Batch:
 
 
 def batch(
-    tensors: Union[Batch, Sequence[Any]],
-    dtype: Optional[DType] = None,
-    device: Optional[Device] = None,
-    layout: Optional[str] = None,
-):
+    tensors: BatchLike,
+    dtype: DTypeLike | None = None,
+    device: DeviceLike | None = None,
+    layout: str | None = None,
+) -> Batch:
     """Constructs a :class:`Batch` object.
 
     Constructs a batch by copying the input tensors and optionally converting them to the desired
@@ -835,17 +848,21 @@ def batch(
             from . import cast
 
             b = cast(b, dtype=dtype, device=device)
+        if layout is not None and layout != b.layout:
+            from . import reshape
+
+            b = reshape(b, layout=layout)  # TODO(michalz): optimize
         return b.evaluate()
     else:
         return Batch(tensors, dtype=dtype, device=device, layout=layout, copy=True)
 
 
 def as_batch(
-    tensors: Union[Batch, Sequence[Any]],
-    dtype: Optional[DType] = None,
-    device: Optional[Device] = None,
-    layout: Optional[str] = None,
-):
+    tensors: BatchLike,
+    dtype: DTypeLike | None = None,
+    device: DeviceLike | None = None,
+    layout: str | None = None,
+) -> Batch:
     """Constructs a :class:`Batch` object, avoiding the copy.
 
     Constructs a batch by viewing the input tensors as a batch. If the input tensors do not
@@ -885,7 +902,12 @@ def as_batch(
             from . import cast
 
             b = cast(b, dtype=dtype, device=device)
-        return b
+        if layout is not None and layout != b.layout:
+            from . import reshape
+
+            return reshape(b, layout=layout)  # TODO(michalz): optimize
+        else:
+            return b
     else:
         return Batch(tensors, dtype=dtype, device=device, layout=layout)
 

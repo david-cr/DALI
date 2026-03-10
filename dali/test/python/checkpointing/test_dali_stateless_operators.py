@@ -1,4 +1,4 @@
-# Copyright (c) 2023-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import numpy as np
 from nvidia.dali import fn, pipeline_def, types
 from test_utils import (
     compare_pipelines,
-    create_sign_off_decorator,
+    create_sign_off_registry,
     get_dali_extra_path,
     check_numba_compatibility_cpu,
     has_operator,
@@ -39,7 +39,7 @@ test_data_frames = 24
 test_sequence_shape = [test_data_frames, 426, 240, 3]  # 240p video
 
 
-stateless_signed_off = create_sign_off_decorator()
+stateless_signed_off = create_sign_off_registry()
 
 
 def tensor_list_to_array(tensor_list):
@@ -214,9 +214,9 @@ def test_resize_stateless(device):
 
 
 @params("cpu", "gpu")
-@stateless_signed_off("experimental.tensor_resize")
+@stateless_signed_off("experimental.tensor_resize", "tensor_resize")
 def test_tensor_resize_stateless(device):
-    check_single_input(fn.experimental.tensor_resize, device, axes=[0, 1], sizes=[40, 40])
+    check_single_input(fn.tensor_resize, device, axes=[0, 1], sizes=[40, 40])
 
 
 @params("cpu", "gpu")
@@ -335,9 +335,9 @@ def test_reductions_variance_stateless(device):
 
 
 @params("cpu", "gpu")
-@stateless_signed_off("experimental.equalize")
+@stateless_signed_off("experimental.equalize", "equalize")
 def test_equalize_stateless(device):
-    check_single_input(fn.experimental.equalize, device)
+    check_single_input(fn.equalize, device)
 
 
 @stateless_signed_off("transforms.crop")
@@ -469,10 +469,10 @@ def test_sphere_stateless(device):
 
 
 @params("cpu", "gpu")
-@stateless_signed_off("experimental.filter")
+@stateless_signed_off("experimental.filter", "filter")
 def test_filter_stateless(device):
     check_single_input(
-        lambda x, **kwargs: fn.experimental.filter(x, np.full((3, 3), 1 / 9), **kwargs),
+        lambda x, **kwargs: fn.filter(x, np.full((3, 3), 1 / 9), **kwargs),
         device,
     )
 
@@ -495,14 +495,14 @@ def test_remap_stateless():
 
 
 @params("cpu", "gpu")
-@stateless_signed_off("experimental.debayer")
+@stateless_signed_off("experimental.debayer", "debayer")
 def test_debayer_stateless(device):
     @pipeline_def(enable_checkpointing=True)
     def pipeline_factory():
         data = fn.external_source(source=RandomBatch((40, 40)), layout="HW", batch=True)
         if device == "gpu":
             data = data.gpu()
-        return fn.experimental.debayer(data, blue_position=[0, 0])
+        return fn.debayer(data, blue_position=[0, 0])
 
     check_is_pipeline_stateless(pipeline_factory)
 
@@ -685,13 +685,13 @@ def test_tensor_join_stateless(device, join):
 
 
 @params("cpu", "gpu")
-@stateless_signed_off("tensor_subscript", "hidden.tensor_subscript")
+@stateless_signed_off("_tensor_subscript", "hidden._tensor_subscript")
 def test_tensor_subscript_stateless(device):
     check_single_input(lambda x, **kwargs: x[0, :, 2:4:-1], device)
 
 
 @params("cpu", "gpu")
-@stateless_signed_off("subscript_dim_check", "hidden.subscript_dim_check")
+@stateless_signed_off("_subscript_dim_check", "hidden._subscript_dim_check")
 def test_subscript_dim_check(device):
     check_single_input(lambda x, **kwargs: x[:], device)
 
@@ -772,7 +772,7 @@ def test_dl_tensor_python_function_stateless(device):
 
 
 @attr("numba")
-@stateless_signed_off("experimental.numba_function")
+@stateless_signed_off("experimental.numba_function", "numba_function")
 def test_numba_function_stateless():
     import nvidia.dali.plugin.numba as dali_numba
 
@@ -786,7 +786,7 @@ def test_numba_function_stateless():
         forty_two = fn.external_source(
             source=lambda x: np.full((2,), 42, dtype=np.uint8), batch=False
         )
-        out = dali_numba.fn.experimental.numba_function(
+        out = dali_numba.fn.numba_function(
             forty_two,
             run_fn=double_sample,
             out_types=[types.DALIDataType.UINT8],
@@ -800,9 +800,9 @@ def test_numba_function_stateless():
     check_is_pipeline_stateless(numba_pipe)
 
 
-@has_operator("experimental.inflate")
+@has_operator("decoders.inflate")
 @restrict_platform(min_compute_cap=6.0)
-@stateless_signed_off("experimental.inflate")
+@stateless_signed_off("decoders.inflate", "experimental.inflate")
 def test_inflate_stateless():
     import lz4.block
 
@@ -820,7 +820,7 @@ def test_inflate_stateless():
     def pipeline():
         deflated = fn.external_source(source=itertools.repeat(input_data))
         shape = fn.external_source(source=itertools.repeat(input_shape))
-        return fn.experimental.inflate(deflated.gpu(), shape=shape)
+        return fn.decoders.inflate(deflated.gpu(), shape=shape)
 
     check_is_pipeline_stateless(pipeline)
 

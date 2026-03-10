@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,25 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional, Tuple, Union
-from ._type import DType, dtype as _dtype, type_id as _type_id
-from ._device import Device, device as _device
-import nvidia.dali.backend as _backend
-from ._eval_context import EvalContext as _EvalContext
-from . import _eval_mode
-from . import _invocation
 import copy
+from typing import TYPE_CHECKING, Any, SupportsInt, Union
+
+import numpy as np
+import nvidia.dali.backend as _backend
+import nvidia.dali._tensor_formatting as _tensor_formatting
 import nvidia.dali.types
+from nvidia.dali._typing import TensorLike
+
+from . import _eval_mode, _invocation, _stream
+from ._arithmetic import _arithm_op
+from ._device import Device, DeviceLike
+from ._device import device as _device
+from ._eval_context import EvalContext as _EvalContext
+from ._type import DType
+from ._type import dtype as _dtype
+from ._type import type_id as _type_id
+
+if TYPE_CHECKING:
+    from ._batch import Batch
 
 
-def _volume(shape: Tuple[int, ...]) -> int:
+def _volume(shape: tuple[int, ...]) -> int:
     ret = 1
     for s in shape:
         ret *= s
     return ret
 
 
-def _backend_device(backend: Union[_backend.TensorCPU, _backend.TensorGPU]) -> Device:
+def _backend_device(backend: _backend.TensorCPU | _backend.TensorGPU) -> Device:
     if isinstance(backend, _backend.TensorCPU):
         return Device("cpu")
     elif isinstance(backend, _backend.TensorGPU):
@@ -54,7 +65,6 @@ def _try_convert_enums(arr):
     if arr.size == 0:
         raise ValueError("Cannot convert an empty array of `object` type.")
     item = arr.flat[0]
-    import numpy as np
 
     if isinstance(item, nvidia.dali.types.DALIInterpType):
         return arr.astype(np.int32), nvidia.dali.types.INTERP_TYPE
@@ -63,7 +73,7 @@ def _try_convert_enums(arr):
     elif isinstance(item, nvidia.dali.types.DALIImageType):
         return arr.astype(np.int32), nvidia.dali.types.IMAGE_TYPE
     else:
-        raise TypeError("Unexpected element type f{type(item)}")
+        raise TypeError(f"Unexpected element type {type(item)}")
 
 
 class Tensor:
@@ -83,13 +93,13 @@ class Tensor:
 
     def __init__(
         self,
-        data: Optional[Any] = None,
-        dtype: Optional[Any] = None,
-        device: Optional[Device] = None,
-        layout: Optional[str] = None,
-        batch: Optional[Any] = None,
-        index_in_batch: Optional[int] = None,
-        invocation_result: Optional[_invocation.InvocationResult] = None,
+        data: TensorLike | None = None,
+        dtype: Any | None = None,
+        device: DeviceLike | None = None,
+        layout: str | None = None,
+        batch: Any | None = None,
+        index_in_batch: int | None = None,
+        invocation_result: _invocation.InvocationResult | None = None,
         copy: bool = False,
     ):
         """Constructs a :class:`Tensor` object.
@@ -167,6 +177,7 @@ class Tensor:
                 self._storage = data
                 self._wraps_external_data = True
                 self._device = _backend_device(data)
+                self._layout = self._storage.layout()
             elif isinstance(data, Tensor):
                 if dtype is None or _type_id(dtype) == data.dtype.type_id:
                     if device is None or device == data.device:
@@ -188,6 +199,7 @@ class Tensor:
                     copied = True
             elif isinstance(data, TensorSlice):
                 self._slice = data
+                self._device = data.device
             elif hasattr(data, "__dlpack_device__"):
                 dl_device_type, device_id = data.__dlpack_device__()
                 if int(dl_device_type) == 1 or int(dl_device_type) == 3:  # CPU
@@ -198,7 +210,7 @@ class Tensor:
                     if ctx.device_id == device_id:
                         stream = ctx.cuda_stream
                     else:
-                        stream = _backend.Stream(device_id)
+                        stream = _stream.stream(device_id=device_id)
                     args = {"stream": stream.handle}
                     self._storage = _backend.TensorGPU(
                         data.__dlpack__(**args),
@@ -212,15 +224,20 @@ class Tensor:
                 self._storage = _backend.TensorCPU(a, layout)
                 self._wraps_external_data = True
             else:
-                import numpy as np
-
                 if dtype is not None:
-                    # TODO(michalz): Built-in enum handling
+                    if dtype.kind == DType.Kind.enum:
+                        numpy_type = np.int32
+                    else:
+                        numpy_type = nvidia.dali.types.to_numpy_type(dtype.type_id)
+
                     self._storage = _backend.TensorCPU(
-                        np.array(data, dtype=nvidia.dali.types.to_numpy_type(dtype.type_id)),
+                        np.array(data, dtype=numpy_type),
                         layout,
                         False,
                     )
+                    if dtype.kind == DType.Kind.enum:
+                        self._storage.reinterpret(dtype.type_id)
+
                     copied = True
                     self._wraps_external_data = False
                     self._dtype = dtype
@@ -276,11 +293,26 @@ class Tensor:
             self._assign(cast(self, dtype=dtype, device=self.device).evaluate())
             copied = True
 
-        if _eval_mode.EvalMode.current().value >= _eval_mode.EvalMode.eager.value:
+        if _eval_mode.EvalMode.current().value > _eval_mode.EvalMode.eager.value:
             self.evaluate()
 
         if copy and self._storage is not None and not copied:
             self._assign(self.to_device(device, True).evaluate())
+
+        if layout and self.layout is not None and self.layout != layout:
+            if self._storage is not None:
+                if copied:
+                    # we're the sole owner of the storage object - just set the layout
+                    self._storage.set_layout(layout)
+                else:
+                    # create a view and change layout
+                    self._storage = type(self._storage)(self._storage)
+                    self._storage.set_layout(layout)
+                self._layout = layout
+            else:
+                from . import reshape
+
+                self._assign(reshape(self, layout=layout))
 
     def _is_external(self) -> bool:
         return self._wraps_external_data
@@ -291,7 +323,7 @@ class Tensor:
         """
         return self.to_device(Device("cpu"))
 
-    def gpu(self, index: Optional[int] = None) -> "Tensor":
+    def gpu(self, index: int | None = None) -> "Tensor":
         """
         Returns the tensor on the GPU. If it's already there, this function returns `self`.
 
@@ -312,13 +344,15 @@ class Tensor:
         else:
             raise RuntimeError("Device not set")
 
-    def to_device(self, device: Device, force_copy: bool = False) -> "Tensor":
+    def to_device(self, device: DeviceLike, force_copy: bool = False) -> "Tensor":
         """
         Returns the tensor on the specified device.
 
         If the tensor already resides on the device specified, the function will return `self`
         unless a copy is explicitly requested by passing ``force_copy=True``
         """
+        if device is not None and not isinstance(device, Device):
+            device = _device(device)
         if self.device == device and not force_copy:
             return self
         else:
@@ -362,7 +396,7 @@ class Tensor:
             raise RuntimeError("Cannot determine the number of dimensions of the tensor.")
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """
         The shape of the tensor, returned as a tuple of integers.
         """
@@ -394,7 +428,7 @@ class Tensor:
         return self._dtype
 
     @property
-    def layout(self) -> str:
+    def layout(self) -> str | None:
         """
         The semantic layout of the tensor, e.g. HWC, CHW.
 
@@ -454,17 +488,17 @@ class Tensor:
         """
         if self.size != 1:
             raise ValueError(f"Tensor has {self.size} elements, expected 1")
-        import numpy as np
 
         with _EvalContext.current():
             return np.array(self.cpu().evaluate()._storage).item()
 
-    def __array__(self):
+    def __array__(self, dtype: Any | None = None, copy: bool | None = None):
         b = self.evaluate()._storage
         if isinstance(b, _backend.TensorCPU):
-            import numpy as np
+            if np.lib.NumpyVersion(np.__version__) < "2.0.0" and copy is None:
+                copy = False
 
-            return np.array(b)
+            return np.array(b, dtype=dtype, copy=copy)
         else:
             raise TypeError("This is not a CPU tensor. Use `.cpu()` to get the array interface.")
 
@@ -474,9 +508,44 @@ class Tensor:
         if isinstance(b, _backend.TensorGPU):
             return b.__cuda_array_interface__
         else:
-            raise TypeError(
+            raise AttributeError(
                 "This is not a GPU tensor. Use `.gpu()` to get the CUDA array interface."
             )
+
+    def __dlpack__(
+        self,
+        stream: SupportsInt | None = None,
+        dl_device: tuple[_backend.DLDeviceType, SupportsInt] | None = None,
+        # TensorCPU and TensorGPU don't accept the copy parameter
+    ):
+        return self.evaluate()._storage.__dlpack__(stream, dl_device)
+
+    def __dlpack_device__(self) -> tuple[_backend.DLDeviceType, int]:
+        return self.evaluate()._storage.__dlpack_device__()
+
+    def torch(self, copy: bool = False):
+        """
+        Returns ``self`` as a PyTorch tensor. Requires PyTorch to be installed.
+
+        Parameters
+        ----------
+        copy : bool, default: False
+            Boolean indicating whether to perform a copy.
+        """
+
+        try:
+            import torch
+        except ModuleNotFoundError:
+            raise RuntimeError("Tensor.torch() requires PyTorch to be installed.") from None
+
+        # PyTorch doesn't handle the DLPack device kDLCUDAHost (pinned memory) but NumPy does...
+        device_type, _ = self.__dlpack_device__()
+        data = np.asarray(self) if device_type == 3 else self
+
+        # Since PyTorch 2.9.0, torch.from_dlpack() supports the 'copy' argument
+        # but Tensor.__dlpack__ doesn't
+        tensor = torch.from_dlpack(data)
+        return tensor if not copy else tensor.clone()
 
     def evaluate(self):
         """
@@ -527,8 +596,10 @@ class Tensor:
             and self._slice is other._slice
         )
 
-    def __str__(self) -> str:
-        return "Tensor(\n" + str(self.evaluate()._storage) + ")"
+    def __repr__(self) -> str:
+        return _tensor_formatting.format_tensor(
+            self.evaluate(), show_data=True, adapter=_tensor_formatting.DynamicTensorAdapter()
+        )
 
     def __add__(self, other):
         return _arithm_op("add", self, other)
@@ -610,13 +681,6 @@ class Tensor:
         return _arithm_op("bitxor", other, self)
 
 
-def _arithm_op(name, *args, **kwargs):
-    argsstr = " ".join(f"&{i}" for i in range(len(args)))
-    from . import arithmetic_generic_op
-
-    return arithmetic_generic_op(*args, expression_desc=f"{name}({argsstr})")
-
-
 def _is_int_value(tested: Any, reference: int) -> bool:
     return isinstance(tested, int) and tested == reference
 
@@ -650,7 +714,7 @@ def _scalar_value(value: Any) -> int:
 
 
 class TensorSlice:
-    def __init__(self, tensor: Tensor, ranges: Tuple[Any, ...], absolute=False):
+    def __init__(self, tensor: Tensor, ranges: tuple[Any, ...], absolute=False):
         self._tensor = copy.copy(tensor)
         self._ndim_dropped = 0
         self._shape = None
@@ -682,7 +746,7 @@ class TensorSlice:
         return self._tensor.ndim - self._ndim_dropped
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         if self._shape is None:
             shape = []
             if self._absolute_ranges is None:
@@ -715,19 +779,21 @@ class TensorSlice:
 
         j = 0
         layout = ""
-        for i, r in enumerate(self._ranges):
+        for r in self._ranges:
             if isinstance(r, slice):
                 layout += input_layout[j]
                 j += 1
             elif r is Ellipsis:
-                j += self._tensor.ndim - len(self._ranges) + 1
+                skip = self._tensor.ndim - len(self._ranges) + 1
+                layout += input_layout[j : j + skip]
+                j += skip
             else:
                 j += 1  # skip this dimension
         self._layout = layout
         return self._layout
 
     @staticmethod
-    def _canonicalize_ranges(ranges, in_shape) -> Tuple[int, ...]:
+    def _canonicalize_ranges(ranges, in_shape) -> tuple[int, ...]:
         """Converts the ranges to sane non-pythonic values without negative indices wrapping"""
         d = 0
         abs_ranges = []
@@ -779,7 +845,7 @@ class TensorSlice:
         return tuple(abs_ranges)
 
     @staticmethod
-    def _insane_pythonic_ranges(abs_ranges, shape) -> Tuple[int, ...]:
+    def _insane_pythonic_ranges(abs_ranges, shape) -> tuple[int, ...]:
         """Converts an absolute range into ranges as expected by Pythonic slicing API"""
         py_ranges = []
         for r, s in zip(abs_ranges, shape):
@@ -817,17 +883,16 @@ class TensorSlice:
                         abs_ranges[d] = r.start + ranges[i] * r.step
                     i += 1
             result = TensorSlice(self._tensor, tuple(abs_ranges), True)
-            if _eval_mode.EvalMode.current().value >= _eval_mode.EvalMode.eager.value:
-                result.evaluate()
-            return Tensor(result)
+            return result._run()
 
-    def evaluate(self):
+    def _run(self):
+        """Executes the slicing operation and returns the resulting Tensor."""
         with _EvalContext.current():
             if len(self._ranges) == 0:
-                return self._tensor.evaluate()
+                return self._tensor
 
             if all(_is_full_slice(r) for r in self._ranges):
-                return self._tensor.evaluate()
+                return self._tensor
 
             args = {}
             d = 0
@@ -837,7 +902,7 @@ class TensorSlice:
                 elif isinstance(r, slice):
                     if r.start is not None:
                         args[f"lo_{d}"] = r.start
-                    if r.stop is not None and r.stop >= 0:
+                    if r.stop is not None:
                         args[f"hi_{d}"] = r.stop
                     if r.step is not None:
                         args[f"step_{d}"] = r.step
@@ -846,17 +911,21 @@ class TensorSlice:
                     args[f"at_{d}"] = r
                     d += 1
 
-            from . import tensor_subscript
+            from . import _tensor_subscript
 
-            return tensor_subscript(self._tensor, **args).evaluate()
+            return _tensor_subscript(self._tensor, **args)
+
+    def evaluate(self):
+        return self._run().evaluate()
 
 
 def tensor(
-    data: Any,
-    dtype: Optional[Any] = None,
-    device: Optional[Device] = None,
-    layout: Optional[str] = None,
-):
+    data: TensorLike,
+    dtype: Any | None = None,
+    device: DeviceLike | None = None,
+    layout: str | None = None,
+    pad: bool = False,
+) -> Tensor:
     """Copies an existing tensor-like object into a DALI tensor.
 
     Parameters
@@ -879,16 +948,29 @@ def tensor(
     layout : str, optional, default: None
         The layout string describing the dimensions of the tensor (e.g., "HWC").
         If not specified, the layout is inferred from the input data, if possible.
+    pad : bool, optional, default: False
+        If ``True`` and `data` is a batch, the batch will be zero-padded.
+        If ``False`` and `data` is a batch of non-uniformly shaped tensors, an error is raised.
     """
+    from . import _batch
+
+    if isinstance(data, _batch.Batch):
+        from . import _batch2tensor
+
+        return _batch2tensor.batch_to_tensor(
+            data, pad=pad, dtype=dtype, layout=layout, device=device, force_copy=True
+        )
+
     return Tensor(data, dtype=dtype, device=device, layout=layout, copy=True)
 
 
 def as_tensor(
-    data: Any,
-    dtype: Optional[Any] = None,
-    device: Optional[Device] = None,
-    layout: Optional[str] = None,
-):
+    data: Union[TensorLike, "Batch"],
+    dtype: Any | None = None,
+    device: DeviceLike | None = None,
+    layout: str | None = None,
+    pad: bool = False,
+) -> Tensor:
     """Wraps an existing tensor-like object into a DALI tensor.
 
     Parameters
@@ -911,11 +993,18 @@ def as_tensor(
     layout : str, optional, default: None
         The layout string describing the dimensions of the tensor (e.g., "HWC").
         If not specified, the layout is inferred from the input data, if possible.
+    pad : bool, optional, default: False
+        If ``True`` and `data` is a batch, the batch will be zero-padded.
+        If ``False`` and `data` is a batch of non-uniformly shaped tensors, an error is raised.
     """
     from . import _batch
 
     if isinstance(data, _batch.Batch):
-        data = data.evaluate()._storage.as_tensor()
+        from . import _batch2tensor
+
+        return _batch2tensor.batch_to_tensor(
+            data, pad=pad, dtype=dtype, layout=layout, device=device
+        )
 
     return Tensor(data, dtype=dtype, device=device, layout=layout, copy=False)
 

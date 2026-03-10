@@ -84,6 +84,8 @@ cmake_dependent_option(BUILD_PYTHON "Build Python bindings" ON
                        "NOT BUILD_DALI_NODEPS" OFF)
 cmake_dependent_option(BUILD_SHM_WRAPPER "Build shared memory bindings, needs BUILD_PYTHON=ON" ON
                       "NOT BUILD_DALI_NODEPS" OFF)
+cmake_dependent_option(USE_PREBUILD_PYBIND11 "Use prebuilt pybind11 from the system instead of the submodule" OFF
+                       "BUILD_PYTHON" OFF)
 cmake_dependent_option(BUILD_LMDB "Build LMDB readers" ON
                        "NOT BUILD_DALI_NODEPS" OFF)
 cmake_dependent_option(BUILD_JPEG_TURBO "Build with libjpeg-turbo support" ON
@@ -144,7 +146,7 @@ cmake_dependent_option(BUILD_NVML "Build with NVIDIA Management Library (NVML) s
 cmake_dependent_option(WITH_DYNAMIC_NVJPEG "Dynamicly load nvJPEG" ON
                       "WITH_DYNAMIC_CUDA_TOOLKIT;BUILD_NVJPEG" OFF)
 cmake_dependent_option(WITH_DYNAMIC_CUFFT "Dynamicly load cuFFT" ON
-                      "WITH_DYNAMIC_CUDA_TOOLKIT" OFF)
+                      "WITH_DYNAMIC_CUDA_TOOLKIT;BUILD_FFTS" OFF)
 cmake_dependent_option(WITH_DYNAMIC_NPP "Dynamicly load npp" ON
                       "WITH_DYNAMIC_CUDA_TOOLKIT" OFF)
 
@@ -212,7 +214,7 @@ if (NOT BUILD_PYTHON AND PYTHON_VERSIONS)
   message(WARNING "The BUILD_PYTHON option is set to off and the PYTHON_VERSIONS variable is
           provided. The latter will be ignored.")
 elseif (BUILD_PYTHON AND "${PYTHON_VERSIONS}" STREQUAL "")
-  set(PYTHON_VERSIONS "3.9;3.10;3.11;3.12;3.13")
+  set(PYTHON_VERSIONS "3.10;3.11;3.12;3.13;3.13t;3.14;3.14t")
 endif ()
 
 if (BUILD_PYTHON)

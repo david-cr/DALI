@@ -17,7 +17,10 @@ test_body() {
         echo "GDS is not supported in that platform"
         exit 0
     fi
-    test_files=("general/data_loading/numpy_reader.ipynb")
+    test_files=(
+        "general/data_loading/numpy_reader/pipeline_mode.ipynb"
+        "general/data_loading/numpy_reader/dynamic_mode.ipynb"
+    )
 
     # GDS can't read data from the Docker filesystem.
     # Here we are copying the relevant part of DALI_extra that we need to run the notebook
@@ -30,10 +33,11 @@ test_body() {
     export DALI_EXTRA_PATH=${NEW_DALI_EXTRA}
 
     # test code
-    echo $test_files | xargs -i jupyter nbconvert \
-                   --to notebook --inplace --execute \
-                   --ExecutePreprocessor.kernel_name=python${PYVER:0:1} \
-                   --ExecutePreprocessor.timeout=600 {}
+    for f in ${test_files[@]}; do
+        jupyter nbconvert --to notebook --inplace --execute \
+                        --ExecutePreprocessor.kernel_name=python${PYVER:0:1} \
+                        --ExecutePreprocessor.timeout=600 $f
+    done
 
     # cleanup
     rm -rf ${tmpdir}

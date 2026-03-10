@@ -4,8 +4,12 @@ CUDA_VERSION=$(echo $(nvcc --version) | sed 's/.*\(release \)\([0-9]\+\)\.\([0-9
 CUDA_VERSION=${CUDA_VERSION:-100}
 CUDA_VERSION_MAJOR=${CUDA_VERSION:0:2}
 
+export PYTHON_GIL=$(python3 -c "import sysconfig; ret=sysconfig.get_config_var('Py_GIL_DISABLED'); print(0 if ret else 1)")
 PYTHON_VERSION=$(python -c "import sys; print(\"{}.{}\".format(sys.version_info[0],sys.version_info[1]))")
 PYTHON_VERSION_SHORT=${PYTHON_VERSION/\./}
+if [ $PYTHON_GIL -eq 0 ]; then
+  PYTHON_VERSION_SHORT="${PYTHON_VERSION_SHORT}t"
+fi
 
 NVIDIA_SMI_DRIVER_VERSION=$(nvidia-smi | grep -Po '(?<=Driver Version: )\d+.\d+') || true
 
@@ -74,6 +78,8 @@ preload_static_tls_libs
 
 
 enable_conda() {
+    OLD_PYTHON_GIL="${PYTHON_GIL-}"
+    export PYTHON_GIL=1
     echo "Activate conda"
     # functions are not exported by default to be made available in subshells
     eval "$(conda shell.bash hook)"
@@ -82,11 +88,15 @@ enable_conda() {
     # TF will use conda lib, not system one to link. Otherwise it will use the system libstdc++.so.6
     # and everything what is imported after it will use it as well
     export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/:$LD_LIBRARY_PATH
+    export PYTHON_GIL=$OLD_PYTHON_GIL
 }
 
 disable_conda() {
+    OLD_PYTHON_GIL="${PYTHON_GIL-}"
+    export PYTHON_GIL=1
     echo "Deactivate conda"
     conda deactivate
+    export PYTHON_GIL=$OLD_PYTHON_GIL
 }
 
 enable_virtualenv() {

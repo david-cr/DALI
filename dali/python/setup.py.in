@@ -1,4 +1,4 @@
-# Copyright (c) 2017-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -59,13 +59,14 @@ For more details please check the
       ),
       include_package_data=True,
       zip_safe=False,
-      python_requires='>=3.9, <3.14',
+      python_requires='>=3.10, <3.15',
       classifiers=[
-          'Programming Language :: Python :: 3.9',
           'Programming Language :: Python :: 3.10',
           'Programming Language :: Python :: 3.11',
           'Programming Language :: Python :: 3.12',
           'Programming Language :: Python :: 3.13',
+          'Programming Language :: Python :: 3.14',
+          'Programming Language :: Python :: Free Threading :: 3 - Stable',
           ],
       py_modules = [
           'rec2idx',
@@ -84,17 +85,16 @@ For more details please check the
           # gast and astunparse are required for AutoGraph.
           # Currently supported range of versions.
           'astunparse >= 1.6.0, <= 1.6.3',
-          'gast >= 0.3.3, <= 0.6.0',
+          'gast >= 0.3.3, <= 0.7.0',
           # the latest astunparse (1.6.3) doesn't work with any other six than
           # 1.16 or later on python 3.12 due to import six.moves
           'six >= 1.16, <= 1.17',
-          'dm-tree <= 0.1.8; python_version<"3.10"',
           'dm-tree <= 0.1.9; python_version>="3.10"',
           'packaging <= 25.0',
+          'numpy',
           'nvtx',
           'makefun',
           @DALI_INSTALL_REQUIRES_NVIMGCODEC@
           @DALI_INSTALL_REQUIRES_NVCOMP@
           ],
      )
-

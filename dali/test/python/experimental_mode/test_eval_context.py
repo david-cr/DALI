@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -54,7 +54,7 @@ def test_eval_context_context_manager():
 def test_eval_context_explicit_stream():
     with ndd.EvalContext.current() as ctx:
         s = ctx.cuda_stream
-        s2 = _backend.Stream(0)
+        s2 = ndd.stream()
         with ndd.EvalContext(cuda_stream=s2) as ctx2:
             assert ndd.EvalContext.current() is ctx2
             assert ndd.EvalContext.current().cuda_stream is s2
@@ -154,7 +154,7 @@ def _validate_gpu_expr_result(result, expected_device_id):
     assert result_cpu.shape == (1,)
     assert result_cpu.dtype == ndd.float32
     assert result_cpu.device.device_type == "cpu"
-    assert result_cpu.device.device_id == 0
+    assert result_cpu.device.device_id is None
     np.testing.assert_array_equal(result_cpu, np.array([5.0], dtype=np.float32))
 
 
@@ -215,15 +215,13 @@ def test_device_match_mixed_operator(device_id):
     image_path = os.path.join(
         get_dali_extra_path(), "db", "single", "jpeg", "100", "swan-3584559_640.jpg"
     )
-    with open(image_path, "rb") as f:
-        # Use .copy() to create a writable array so that it can be passed as a Tensor through dlpack
-        encoded_data = np.frombuffer(f.read(), dtype=np.uint8).copy()
+    encoded_data = np.fromfile(image_path, dtype=np.uint8)
 
     if device_id is None:
-        decoded_gpu = ndd.decoders.image(encoded_data, device="mixed")
+        decoded_gpu = ndd.decoders.image(encoded_data, device="gpu")
     else:
         with ndd.Device(f"gpu:{device_id}"):
-            decoded_gpu = ndd.decoders.image(encoded_data, device="mixed")
+            decoded_gpu = ndd.decoders.image(encoded_data, device="gpu")
 
     eval_device_id = device_id if device_id is not None else 0
     with ndd.EvalContext(device_id=eval_device_id):
@@ -234,3 +232,172 @@ def test_device_match_mixed_operator(device_id):
         assert output.ndim == 3
         assert output.shape == (408, 640, 3)
         assert output.dtype == ndd.uint8
+
+
+@attr("multi_gpu")
+def test_set_device_via_context_mixed_op():
+    if _backend.GetCUDADeviceCount() < 2:
+        raise SkipTest("At least 2 devices needed for the test")
+
+    image_path = os.path.join(
+        get_dali_extra_path(), "db", "single", "jpeg", "100", "swan-3584559_640.jpg"
+    )
+    encoded_data = np.fromfile(image_path, dtype=np.uint8)
+
+    with ndd.EvalContext(device_id=0):
+        decoded = ndd.decoders.image(encoded_data, device="gpu")
+        output0 = decoded.evaluate()
+        assert output0.device == ndd.device("gpu:0")
+
+    with ndd.EvalContext(device_id=1):
+        decoded = ndd.decoders.image(encoded_data, device="gpu")
+        output1 = decoded.evaluate()
+        assert output1.device == ndd.device("gpu:1")
+        output0_cpu = output0.cpu()  # copy from device 0 with current device being 1
+
+    output1_cpu = output0.cpu()  # copy from device 1 with current device being 0
+
+    assert np.array_equal(output0_cpu, output1_cpu)
+
+
+def test_get_set_num_threads():
+    ndd.set_num_threads(None)
+    try:
+        assert ndd.get_num_threads() == len(os.sched_getaffinity(0))
+        ctx = ndd.EvalContext()
+        assert ctx._thread_pool.num_threads == len(os.sched_getaffinity(0))
+        ndd.set_num_threads(42)
+        assert ndd.get_num_threads() == 42
+        assert ctx.num_threads == 42
+        assert ctx._thread_pool.num_threads == 42
+        ndd.set_num_threads(None)
+        assert ndd.get_num_threads() == len(os.sched_getaffinity(0))
+        assert ctx.num_threads == len(os.sched_getaffinity(0))
+        assert ctx._thread_pool.num_threads == len(os.sched_getaffinity(0))
+    finally:
+        ndd.set_num_threads(None)
+
+
+def test_default_stream():
+    ndd.set_default_stream(None)
+    try:
+        s1 = ndd.EvalContext.current().cuda_stream
+        s2 = ndd.EvalContext.current().cuda_stream
+        assert s1 is s2
+        s = ndd.stream()
+        assert s is not s1
+        ndd.set_default_stream(s)
+        assert ndd.get_default_stream() is s
+        s3 = ndd.EvalContext.current().cuda_stream
+        assert s3 is s
+
+        ndd.set_default_stream(None)
+        s4 = ndd.EvalContext.current().cuda_stream
+        assert s4 is not s3
+        s5 = ndd.EvalContext.current().cuda_stream
+        assert s5 is s4
+    finally:
+        ndd.set_default_stream(None)
+
+
+def _ctx_test_op(check_func):
+    class Flip2(ndd._ops.Flip):
+        def _run(self, ctx, *inputs, **args):
+            check_func(ctx)
+            return ndd._ops.Flip._run(self, ctx, *inputs, **args)
+
+    flip2_func = ndd._op_builder.build_fn_wrapper(Flip2, "flip2", False)
+    return flip2_func
+
+
+def test_global_param_change_delay():
+    calls = 0
+    expected_num_threads = 8
+    expected_stream = None
+
+    def check(ctx):
+        nonlocal calls
+        assert ctx.cuda_stream is expected_stream
+        assert ctx._thread_pool.num_threads == expected_num_threads
+        calls += 1
+
+    try:
+        with ndd.EvalMode.deferred:
+            expected_num_threads = 8
+            s0 = ndd.stream()
+            s1 = ndd.stream()
+            expected_stream = s0
+            ndd.set_num_threads(expected_num_threads)
+            ndd.set_default_stream(expected_stream)
+
+            op = _ctx_test_op(check)
+            data = ndd.tensor(np.zeros((480, 640, 3), dtype=np.int8))
+
+            t = op(data)  # this should use s0 and 8...
+            ndd.set_num_threads(42)
+            ndd.set_default_stream(s1)
+            assert calls == 0  # even though it wasn't evaluated before the global values changed
+
+            t.evaluate()  # evaluate now and...
+            assert calls == 1  # ...make sure the test function did run
+
+            expected_stream = s1
+            expected_num_threads = 42
+
+            t = op(data)  # this should use s1 and 42...
+            ndd.set_num_threads(None)
+            ndd.set_default_stream(None)
+            assert calls == 1
+            t.evaluate()
+            assert calls == 2  # make sure the test function ran again
+    finally:
+        ndd.set_num_threads(None)
+        ndd.set_default_stream(None)
+
+
+@attr("pytorch")
+def test_use_torch_stream():
+    import torch
+
+    try:
+        s = torch.cuda.Stream()
+        with torch.cuda.stream(s):
+            t = torch.arange(100000, dtype=torch.int32, device="cuda")
+            ndd.set_default_stream(s)
+            tensor = ndd.as_tensor(t).evaluate()
+            x = tensor + 1
+            cmp = x.cpu().evaluate()
+            assert np.array_equal(np.arange(1, 100001, dtype=np.int32), np.array(cmp))
+
+    finally:
+        ndd.set_num_threads(None)
+        ndd.set_default_stream(None)
+
+
+def test_non_default_ctx_stream():
+    try:
+        ctx0 = ndd.EvalContext()
+        s1 = ndd.stream()
+        ndd.set_default_stream(s1)
+        assert ctx0.cuda_stream != s1
+        assert ndd.get_default_stream() == s1
+        assert ndd.get_current_stream() == s1
+        assert ndd.EvalContext.default().cuda_stream == s1
+        ctx1 = ndd.EvalContext()
+        assert ctx1.cuda_stream == s1
+        s2 = ndd.stream()
+        ndd.set_current_stream(s2)
+        ctx2 = ndd.EvalContext()
+        assert ndd.get_current_stream() == s2
+        assert ndd.EvalContext.default().cuda_stream == s2
+        assert ctx2.cuda_stream == s2
+        assert ctx1.cuda_stream == s1
+
+        ndd.set_current_stream(None)
+        assert ndd.get_current_stream() == s1
+        assert ndd.EvalContext.default().cuda_stream == s1
+        assert ctx2.cuda_stream == s2
+        assert ctx1.cuda_stream == s1
+    finally:
+        ndd.set_default_stream(None)
+        ndd.set_current_stream(None)

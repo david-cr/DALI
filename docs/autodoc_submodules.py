@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2020-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import nvidia.dali.plugin.pytorch
-import nvidia.dali.plugin.numba
-import nvidia.dali.plugin.jax
-import nvidia.dali.experimental.dynamic
 import inspect
 import sys
+
+import nvidia.dali.experimental.dynamic
+import nvidia.dali.plugin.jax
+import nvidia.dali.plugin.numba
+import nvidia.dali.plugin.pytorch
 
 try:
     import nvidia.dali.plugin.video
@@ -122,8 +123,6 @@ def get_schema_names(module, functions):
         obj = getattr(sys.modules[module], fun)
         if hasattr(obj, "_schema_name"):
             return obj._schema_name
-        elif hasattr(obj, "schema"):
-            return obj.schema.Name()
         else:
             return operations_table.no_schema_fns[f"{module}.{fun}"]
 
@@ -156,7 +155,7 @@ def get_references(name, references):
     if name in references:
         result += ".. seealso::\n"
         for desc, url in references[name]:
-            result += f"   * `{desc} <../{url}>`_\n"
+            result += f"   * `{desc} </{url}>`_\n"
     return result
 
 
@@ -255,14 +254,16 @@ def fn_autodoc(out_filename, generated_path, references):
 def dynamic_autodoc(
     out_filename, generated_path, relative_generated_path, references
 ):
-    all_modules = get_modules(dynamic_modules)
+    all_modules = [
+        m for m in get_modules(dynamic_modules) if "readers" not in m
+    ]
     write_toctree(all_modules, relative_generated_path, out_filename)
     for module in all_modules:
         dali_module = sys.modules[module]
         funs_in_module = [
             fun
             for fun in get_functions(dali_module)
-            if hasattr(getattr(dali_module, fun), "schema")
+            if hasattr(getattr(dali_module, fun), "_schema_name")
         ]
 
         write_module_file(generated_path, module, funs_in_module, references)
@@ -282,7 +283,7 @@ def dynamic_readers_autodoc(
             k
             for k, v in dali_module.__dict__.items()
             if inspect.isclass(v)
-            and issubclass(v, nvidia.dali.experimental.dynamic.ops.Reader)
+            and issubclass(v, nvidia.dali.experimental.dynamic._ops.Reader)
         ]
 
         write_module_file(generated_path, module, readers_in_module, references)
