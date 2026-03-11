@@ -168,7 +168,7 @@ TEST(TypeInfoCopy, HostToHostCopyOnStreamError) {
   CUDA_CALL(cudaStreamCreate(&stream));
 
   // Should throw when trying to do H2H copy with a stream
-  ASSERT_THROW((type.Copy<CPUBackend, CPUBackend>(dst.data(), src.data(), n, stream, false)), std::logic_error);
+  ASSERT_THROW((type.Copy<CPUBackend, CPUBackend>(dst.data(), std::nullopt, src.data(), std::nullopt, n, stream, false)), std::logic_error);
 
   CUDA_CALL(cudaStreamDestroy(stream));
 }
@@ -212,8 +212,8 @@ TEST(TypeInfoCopy, ScatterGatherCopyMultipleToMultiple) {
   CUDA_CALL(cudaStreamCreate(&stream));
 
   // Call Copy with use_copy_kernel=true to trigger ScatterGatherCopy (lines 124-125)
-  type.Copy<GPUBackend, GPUBackend>(h_dsts.data(), h_srcs.data(), sizes.data(), n_samples,
-                                    stream, true);
+  type.Copy<GPUBackend, GPUBackend>(h_dsts.data(), std::nullopt, h_srcs.data(), std::nullopt,
+                                    sizes.data(), n_samples, stream, true);
 
   CUDA_CALL(cudaStreamSynchronize(stream));
 
@@ -264,8 +264,8 @@ TEST(TypeInfoCopy, ScatterGatherCopySingleToMultiple) {
   CUDA_CALL(cudaStreamCreate(&stream));
 
   // Call Copy with use_copy_kernel=true
-  type.Copy<GPUBackend, GPUBackend>(h_dsts.data(), d_src, sizes.data(), n_samples,
-                                    stream, true);
+  type.Copy<GPUBackend, GPUBackend>(h_dsts.data(), std::nullopt, d_src, std::nullopt,
+                                    sizes.data(), n_samples, stream, true);
 
   CUDA_CALL(cudaStreamSynchronize(stream));
 
@@ -320,8 +320,8 @@ TEST(TypeInfoCopy, ScatterGatherCopyMultipleToSingle) {
   CUDA_CALL(cudaStreamCreate(&stream));
 
   // Call Copy with use_copy_kernel=true
-  type.Copy<GPUBackend, GPUBackend>(d_dst, h_srcs.data(), sizes.data(), n_samples,
-                                    stream, true);
+  type.Copy<GPUBackend, GPUBackend>(d_dst, std::nullopt, h_srcs.data(), std::nullopt,
+                                    sizes.data(), n_samples, stream, true);
 
   CUDA_CALL(cudaStreamSynchronize(stream));
 
