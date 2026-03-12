@@ -25,6 +25,18 @@
 
 namespace dali {
 namespace detail {
+
+template <typename>
+struct ReadFuncTraits;
+template <typename R, typename FD, typename Buf, typename Size>
+struct ReadFuncTraits<R(*)(FD, Buf, Size)> {
+  using return_type = R;
+  using fd_type = FD;
+};
+
+using libtar_read_ret_t = typename ReadFuncTraits<readfunc_t>::return_type;
+using libtar_fd_t = typename ReadFuncTraits<readfunc_t>::fd_type;
+
 constexpr size_t kBlockSize = T_BLOCKSIZE;
 
 /**
@@ -120,7 +132,7 @@ class DLL_PUBLIC TarArchive {
   std::unique_ptr<FileStream> stream_;
   int instance_handle_ = -1;
   void* handle_ = nullptr;  // handle to the TAR struct
-  friend ssize_t LibtarReadTarArchive(int, void*, size_t);
+  friend libtar_read_ret_t LibtarReadTarArchive(libtar_fd_t, void*, size_t);
 
   std::string filename_;
   size_t filesize_ = 0;

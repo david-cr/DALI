@@ -73,15 +73,28 @@ inline TAR** ToTarHandle(void** handle) {
   return reinterpret_cast<TAR**>(handle);
 }
 
+using open_ret_t = decltype(std::declval<openfunc_t>()(nullptr, 0));
+
+template <typename>
+struct FuncTraits;
+template <typename R, typename FD>
+struct FuncTraits<R(*)(FD)> { using ret = R; using fd = FD; };
+template <typename R, typename FD, typename Buf, typename Size>
+struct FuncTraits<R(*)(FD, Buf, Size)> { using ret = R; using fd = FD; };
+
+using close_ret_t = typename FuncTraits<closefunc_t>::ret;
+using close_fd_t = typename FuncTraits<closefunc_t>::fd;
+using write_ret_t = typename FuncTraits<writefunc_t>::ret;
+using write_fd_t = typename FuncTraits<writefunc_t>::fd;
+
 }  // namespace
 
-ssize_t LibtarReadTarArchive(int instance_handle_, void* buf, size_t count) {
+libtar_read_ret_t LibtarReadTarArchive(libtar_fd_t instance_handle_, void* buf, size_t count) {
   const auto current_archive = instances[instance_handle_];
-  const ssize_t num_read = current_archive->stream_->Read(reinterpret_cast<uint8_t*>(buf), count);
-  return num_read;
+  return current_archive->stream_->Read(reinterpret_cast<uint8_t*>(buf), count);
 }
 
-int LibtarOpenTarArchive(const char*, int oflags, ...) {
+open_ret_t LibtarOpenTarArchive(const char*, int oflags, ...) {
   va_list args;
   va_start(args, oflags);
   const int instance_handle_ = va_arg(args, int);
@@ -89,9 +102,12 @@ int LibtarOpenTarArchive(const char*, int oflags, ...) {
   return instance_handle_;
 }
 
-static tartype_t kTarArchiveType = {LibtarOpenTarArchive, [](int) -> int { return 0; },
+static tartype_t kTarArchiveType = {LibtarOpenTarArchive,
+                                    [](close_fd_t) -> close_ret_t { return 0; },
                                     LibtarReadTarArchive,
-                                    [](int, const void*, size_t) -> ssize_t { return 0; }};
+                                    [](write_fd_t, const void*, size_t) -> write_ret_t {
+                                      return 0;
+                                    }};
 
 TarArchive::TarArchive(std::unique_ptr<FileStream> stream)
     : stream_(std::move(stream)), instance_handle_(Register(this)) {
