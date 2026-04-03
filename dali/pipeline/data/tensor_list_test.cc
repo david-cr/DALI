@@ -2053,6 +2053,54 @@ TEST_F(TensorListVariableBatchSizeTest, UpdatePropertiesFromSamples) {
   // check if after calling UpdatePropertiesFromSamples even empty samples in TL have consistent
   // metadata with the the whole TL
   tv.SetSample(1, tv.tensor_handle(2));
+
+  // Type mismatch error path
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(0).Resize({3}, DALI_FLOAT);
+    tl.tensor_handle(1).Resize({3}, DALI_INT32);
+    EXPECT_THROW(tl.UpdatePropertiesFromSamples(false), std::runtime_error);
+  }
+
+  // Sample dim mismatch error path
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(0).Resize({3, 4}, DALI_FLOAT);
+    tl.tensor_handle(1).Resize({3}, DALI_FLOAT);
+    EXPECT_THROW(tl.UpdatePropertiesFromSamples(false), std::runtime_error);
+  }
+
+  // Layout mismatch error path
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(0).Resize({3, 4}, DALI_FLOAT);
+    tl.tensor_handle(0).SetLayout("HW");
+    tl.tensor_handle(1).Resize({5, 6}, DALI_FLOAT);
+    tl.tensor_handle(1).SetLayout("XY");
+    EXPECT_THROW(tl.UpdatePropertiesFromSamples(false), std::runtime_error);
+  }
+
+  // Pinned mismatch error path
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(0).set_pinned(false);
+    tl.tensor_handle(0).Resize({3, 4}, DALI_FLOAT);
+    tl.tensor_handle(1).set_pinned(true);
+    tl.tensor_handle(1).Resize({5, 6}, DALI_FLOAT);
+    EXPECT_THROW(tl.UpdatePropertiesFromSamples(false), std::runtime_error);
+  }
+
+  // Device id mismatch error path
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(0).set_pinned(false);
+    tl.tensor_handle(0).set_device_id(0);
+    tl.tensor_handle(0).Resize({3, 4}, DALI_FLOAT);
+    tl.tensor_handle(1).set_pinned(false);
+    tl.tensor_handle(1).set_device_id(1);
+    tl.tensor_handle(1).Resize({5, 6}, DALI_FLOAT);
+    EXPECT_THROW(tl.UpdatePropertiesFromSamples(false), std::runtime_error);
+  }
 }
 
 TEST(TensorList, ResizeOverheadPerf) {
@@ -2377,6 +2425,100 @@ TEST(TensorListCoverageTest, CopySampleGPULayoutPropagation) {
   target.CopySample(0, src, 0, AccessOrder(cudaStream_t(0)));
   EXPECT_EQ(target.GetMeta(0).GetLayout(), "HW");
 }
+
+// Test SetSkipSample (0% coverage)
+TEST(TensorListCoverage, SetSkipSample) {
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(3, {2, 3}), DALI_FLOAT);
+  tl.SetSkipSample(0, true);
+  tl.SetSkipSample(1, false);
+}
+
+// Test MakeContiguous on already-contiguous TL (early return path)
+TEST(TensorListCoverage, MakeContiguousAlreadyContiguous) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Contiguous);
+  tl.Resize(uniform_list_shape(3, {2, 3}), DALI_FLOAT);
+  ASSERT_TRUE(tl.IsContiguous());
+  tl.MakeContiguous();
+}
+
+// Test MakeContiguous on non-contiguous TL (DALI_FAIL path)
+TEST(TensorListCoverage, MakeContiguousOnNoncontiguous) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Noncontiguous);
+  tl.Resize(uniform_list_shape(3, {2, 3}), DALI_FLOAT);
+  ASSERT_FALSE(tl.IsContiguous());
+  EXPECT_THROW(tl.MakeContiguous(), std::runtime_error);
+}
+
+// Test SetContiguity error path - change on allocated buffer
+TEST(TensorListCoverage, SetContiguityOnAllocatedBuffer) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Contiguous);
+  tl.Resize(uniform_list_shape(3, {2, 3}), DALI_FLOAT);
+  EXPECT_THROW(tl.SetContiguity(BatchContiguity::Noncontiguous), std::runtime_error);
+}
+
+// Test AsReshapedTensor with invalid type
+TEST(TensorListCoverage, AsReshapedTensorInvalidType) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Contiguous);
+  tl.SetSize(1);
+  EXPECT_THROW(tl.AsReshapedTensor(TensorShape<>{0}), std::runtime_error);
+}
+
+// Test AsReshapedTensor with volume mismatch
+TEST(TensorListCoverage, AsReshapedTensorVolumeMismatch) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Contiguous);
+  tl.Resize(uniform_list_shape(2, {3, 4}), DALI_FLOAT);
+  EXPECT_THROW(tl.AsReshapedTensor(TensorShape<>{5}), std::runtime_error);
+}
+
+// Test AsReshapedTensor on non-contiguous memory
+TEST(TensorListCoverage, AsReshapedTensorNotContiguous) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Noncontiguous);
+  tl.Resize(TensorListShape<>{{2, 3}, {4, 5}}, DALI_FLOAT);
+  auto total_elements = tl.shape().num_elements();
+  EXPECT_THROW(tl.AsReshapedTensor(TensorShape<>{total_elements}), std::runtime_error);
+}
+
+// Test AsReshapedTensor noncontiguous empty batch (ptr = nullptr else branch)
+TEST(TensorListCoverage, AsReshapedTensorEmptyNoncontiguous) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Noncontiguous);
+  tl.set_type(DALI_FLOAT);
+  auto tensor = tl.AsReshapedTensor(TensorShape<>{0});
+  EXPECT_EQ(tensor.shape(), TensorShape<>{0});
+  EXPECT_EQ(tensor.raw_data(), nullptr);
+}
+
+// Test AsTensor on non-dense (non-uniform) batch
+TEST(TensorListCoverage, AsTensorNonDense) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Contiguous);
+  tl.Resize(TensorListShape<>{{2, 3}, {4, 5}}, DALI_FLOAT);
+  ASSERT_FALSE(tl.IsDenseTensor());
+  EXPECT_THROW(tl.AsTensor(), std::runtime_error);
+}
+
+// Test _chunks_nbytes and _chunks_capacity for noncontiguous TL
+TEST(TensorListCoverage, ChunksNbytesCapacityNoncontiguous) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Noncontiguous);
+  tl.Resize(TensorListShape<>{{2, 3}, {4, 5}}, DALI_FLOAT);
+  auto nbytes = tl._chunks_nbytes();
+  ASSERT_EQ(nbytes.size(), 2u);
+  EXPECT_EQ(nbytes[0], 6 * sizeof(float));
+  EXPECT_EQ(nbytes[1], 20 * sizeof(float));
+  auto caps = tl._chunks_capacity();
+  ASSERT_EQ(caps.size(), 2u);
+  EXPECT_GE(caps[0], 6 * sizeof(float));
+  EXPECT_GE(caps[1], 20 * sizeof(float));
+}
+
 
 }  // namespace test
 }  // namespace dali
