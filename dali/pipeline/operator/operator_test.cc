@@ -13,8 +13,10 @@
 // limitations under the License.
 
 #include <gtest/gtest.h>
+#include <memory>
 #include <string>
 #include "dali/pipeline/operator/operator.h"
+#include "dali/pipeline/data/backend.h"
 
 namespace dali {
 namespace testing {
@@ -130,6 +132,74 @@ TYPED_TEST(OperatorDiagnosticsTest, NonexistingParameterTest) {
                std::runtime_error);
 }
 
+
+namespace {
+
+class TestableOp : public OperatorBase {
+ public:
+  using OperatorBase::OperatorBase;
+  using OperatorBase::EnforceUniformInputBatchSize;
+  using OperatorBase::EnforceUniformOutputBatchSize;
+
+  bool HasContiguousOutputs() const override { return false; }
+  bool SetupImpl(std::vector<OutputDesc> &, const Workspace &) override { return false; }
+  void RunImpl(Workspace &) override {}
+};
+
+}  // namespace
+
+TEST(InstantiateOperator, UnknownDevice) {
+  auto spec = OpSpec("Copy")
+    .AddArg("num_threads", 1)
+    .AddArg("max_batch_size", 32)
+    .AddArg("device", "unknown_device");
+  EXPECT_THROW(InstantiateOperator(spec), std::runtime_error);
+}
+
+TEST(OperatorBatchSize, MismatchedInputBatchSize) {
+  auto in1 = std::make_shared<TensorList<CPUBackend>>();
+  in1->Resize({{1}, {2}, {3}}, DALI_FLOAT);
+
+  auto in2 = std::make_shared<TensorList<CPUBackend>>();
+  in2->Resize({{1}, {2}}, DALI_FLOAT);
+
+  Workspace ws;
+  ws.AddInput(in1);
+  ws.AddInput(in2);
+
+  TestableOp op(MakeOpSpec("Copy"));
+  EXPECT_THROW(op.EnforceUniformInputBatchSize(ws), std::runtime_error);
+}
+
+TEST(OperatorBatchSize, MismatchedArgumentInputBatchSize) {
+  auto in1 = std::make_shared<TensorList<CPUBackend>>();
+  in1->Resize({{1}, {2}, {3}}, DALI_FLOAT);
+
+  auto arg_in = std::make_shared<TensorList<CPUBackend>>();
+  arg_in->Resize({{1}, {2}}, DALI_FLOAT);
+
+  Workspace ws;
+  ws.AddInput(in1);
+  ws.AddArgumentInput("some_arg", arg_in);
+
+  TestableOp op(MakeOpSpec("Copy"));
+  EXPECT_THROW(op.EnforceUniformInputBatchSize(ws), std::runtime_error);
+}
+
+TEST(OperatorBatchSize, MismatchedOutputBatchSize) {
+  auto in1 = std::make_shared<TensorList<CPUBackend>>();
+  in1->Resize({{1}, {2}, {3}}, DALI_FLOAT);
+
+  auto out1 = std::make_shared<TensorList<CPUBackend>>();
+  out1->Resize({{1}, {2}}, DALI_FLOAT);
+
+  Workspace ws;
+  ws.AddInput(in1);
+  ws.AddOutput(out1);
+
+  TestableOp op(MakeOpSpec("Copy"));
+  EXPECT_THROW(op.EnforceUniformOutputBatchSize(ws), std::runtime_error);
+}
 
 }  // namespace testing
 }  // namespace dali
