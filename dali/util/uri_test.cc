@@ -14,6 +14,7 @@
 
 #include "dali/util/uri.h"
 #include <gtest/gtest.h>
+#include "dali/util/s3_filesystem.h"
 
 namespace dali {
 
@@ -515,6 +516,36 @@ TEST(URI, Parse_AllowNonEscaped) {
     "http://example.com/path with spaces", URI::ParseOpts::AllowNonEscaped);
   EXPECT_TRUE(uri.valid());
   // This should allow spaces in path with AllowNonEscaped option
+}
+
+TEST(S3Filesystem, ParseUri_ValidForms) {
+  {
+    auto loc = s3_filesystem::parse_uri("s3://bucket/path/to/object");
+    EXPECT_EQ(loc.bucket, "bucket");
+    EXPECT_EQ(loc.object, "path/to/object");
+  }
+  {
+    auto loc = s3_filesystem::parse_uri("s3://bucket");
+    EXPECT_EQ(loc.bucket, "bucket");
+    EXPECT_EQ(loc.object, "");
+  }
+  {
+    auto loc = s3_filesystem::parse_uri("s3://bucket//double/slash");
+    EXPECT_EQ(loc.bucket, "bucket");
+    EXPECT_EQ(loc.object, "/double/slash");
+  }
+}
+
+TEST(S3Filesystem, ParseUri_InvalidScheme) {
+  EXPECT_THROW(s3_filesystem::parse_uri("http://bucket/object"), std::runtime_error);
+  EXPECT_THROW(s3_filesystem::parse_uri("file://bucket/object"), std::runtime_error);
+}
+
+TEST(S3Filesystem, GetStats_EmptyObjectThrowsBeforeS3Call) {
+  s3_filesystem::S3ObjectLocation loc;
+  loc.bucket = "bucket";
+  loc.object = "";
+  EXPECT_THROW((void)s3_filesystem::get_stats(nullptr, loc), std::runtime_error);
 }
 
 }  // namespace dali
