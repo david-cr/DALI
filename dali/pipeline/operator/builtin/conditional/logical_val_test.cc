@@ -711,4 +711,52 @@ TEST_F(ValidationTest, EnforceConditionalInputKindNoTypeEnforcement) {
   }
 }
 
+// Test ValidateParamsInternal error path via invalid expression name
+TEST_F(ValidationTest, EnforceConditionalInputKindInvalidName) {
+  std::vector<bool> data = {true};
+  auto input = CreateScalarInput(data, DALI_BOOL);
+
+  EXPECT_THROW({
+    try {
+      EnforceConditionalInputKind(input, "invalid_name", "", true);
+    } catch (const DALIException &e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Internal error - DALI diagnostic configured incorrectly."),
+                std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test ValidateParamsInternal error path via invalid argument position
+TEST_F(ValidationTest, EnforceConditionalInputKindInvalidWhere) {
+  std::vector<bool> data = {true};
+  auto input = CreateScalarInput(data, DALI_BOOL);
+
+  EXPECT_THROW({
+    try {
+      EnforceConditionalInputKind(input, "and", "middle", true);
+    } catch (const DALIException &e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Internal error - DALI diagnostic configured incorrectly."),
+                std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
+// Test ValidateParamsInternal error path from ReportGpuInputError
+TEST_F(ValidationTest, ReportGpuInputErrorInvalidParams) {
+  EXPECT_THROW({
+    try {
+      ReportGpuInputError("invalid_name", "invalid_where", true);
+    } catch (const DALIException &e) {
+      std::string error_msg = e.what();
+      EXPECT_NE(error_msg.find("Internal error - DALI diagnostic configured incorrectly."),
+                std::string::npos);
+      throw;
+    }
+  }, DALIException);
+}
+
 }  // namespace dali

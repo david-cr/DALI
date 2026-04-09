@@ -5154,4 +5154,103 @@ TEST_F(PipelineTestOnce, TestMemoryHintVector) {
   EXPECT_NO_THROW(pipe.Run());
 }
 
+// GPU ExternalSource with repeat_last - FindNodes GPU path (line 1208-1209)
+TEST_F(PipelineTestOnce, TestRepeatLastInputsGPUBackend) {
+  int ndev = 0;
+  CUDA_CALL(cudaGetDeviceCount(&ndev));
+  if (ndev > 0) {
+    Pipeline pipe(1, 1, 0);
+    pipe.AddOperator(
+        OpSpec("ExternalSource")
+        .AddArg("name", "gpu_data")
+        .AddArg("device", "gpu")
+        .AddArg("repeat_last", true)
+        .AddOutput("gpu_data", StorageDevice::GPU),
+        "gpu_data");
+
+    pipe.AddOperator(
+        OpSpec("Copy")
+        .AddArg("device", "gpu")
+        .AddInput("gpu_data", StorageDevice::GPU)
+        .AddOutput("copy_out", StorageDevice::GPU));
+
+    pipe.Build({{"copy_out", "gpu"}});
+
+    TensorList<GPUBackend> data;
+    data.Resize(uniform_list_shape(1, {4}), DALI_FLOAT);
+    pipe.SetExternalInput("gpu_data", data);
+
+    EXPECT_NO_THROW(pipe.Run());
+    Workspace ws;
+    pipe.Outputs(&ws);
+  }
+}
+
+// ReleaseOutputs before Build (line 755)
+TEST_F(PipelineTestOnce, TestReleaseOutputsBeforeBuild) {
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+  EXPECT_THROW(pipe.ReleaseOutputs(), std::runtime_error);
+}
+
+// CPU-to-GPU MakeContiguous path (lines 1133-1135)
+TEST_F(PipelineTestOnce, TestCPUToGPUMakeContiguous) {
+  int ndev = 0;
+  CUDA_CALL(cudaGetDeviceCount(&ndev));
+  if (ndev > 0) {
+    Pipeline pipe(1, 1, 0);
+    pipe.AddExternalInput("cpu_data", "cpu");
+
+    pipe.AddOperator(
+        OpSpec("Copy")
+        .AddArg("device", "gpu")
+        .AddInput("cpu_data", StorageDevice::GPU)
+        .AddOutput("gpu_out", StorageDevice::GPU));
+
+    pipe.Build({{"gpu_out", "gpu"}});
+
+    TensorList<CPUBackend> data;
+    data.set_pinned(false);
+    data.Resize(uniform_list_shape(1, {4}), DALI_FLOAT);
+    pipe.SetExternalInput("cpu_data", data);
+
+    EXPECT_NO_THROW(pipe.Run());
+    Workspace ws;
+    pipe.Outputs(&ws);
+  }
+}
+
+// Repeat-last prefetch refill path (line 1226) with explicit host order
+TEST_F(PipelineTestOnce, TestRepeatLastPrefetchHostOrder) {
+  Pipeline pipe(1, 1, 0);
+  pipe.AddOperator(
+      OpSpec("ExternalSource")
+          .AddArg("name", "data")
+          .AddArg("device", "cpu")
+          .AddArg("repeat_last", true)
+          .AddOutput("data", StorageDevice::CPU),
+      "data");
+
+  pipe.AddOperator(
+      OpSpec("Copy")
+          .AddArg("device", "cpu")
+          .AddInput("data", StorageDevice::CPU)
+          .AddOutput("copy_out", StorageDevice::CPU));
+
+  pipe.Build({{"copy_out", "cpu"}});
+
+  TensorList<CPUBackend> data;
+  data.set_pinned(false);
+  data.Resize(uniform_list_shape(1, {4}), DALI_FLOAT);
+  pipe.SetExternalInput("data", data, AccessOrder::host());
+
+  EXPECT_NO_THROW(pipe.Run());
+  Workspace ws1;
+  EXPECT_NO_THROW(pipe.Outputs(&ws1));
+
+  EXPECT_NO_THROW(pipe.Prefetch());
+  Workspace ws2;
+  EXPECT_NO_THROW(pipe.Outputs(&ws2));
+}
+
 }  // namespace dali
