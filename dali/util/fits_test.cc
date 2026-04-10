@@ -1121,5 +1121,120 @@ TEST(FitsExtractDataTest, PixelOrderReversalCoverage) {
   }
 }
 
+namespace {
+
+void CreateSyntheticFitsImage(const std::string& path, int img_type,
+                              int ndim, const std::vector<long>& naxes) {
+  fitsfile *fptr = nullptr;
+  int status = 0;
+  std::string filepath = "!" + path;
+  fits_create_file(&fptr, filepath.c_str(), &status);
+  ASSERT_EQ(status, 0) << "Failed to create FITS file: " << path;
+  long *axes_ptr = ndim > 0 ? const_cast<long*>(naxes.data()) : nullptr;
+  fits_create_img(fptr, img_type, ndim, axes_ptr, &status);
+  ASSERT_EQ(status, 0) << "Failed to create image HDU for type " << img_type;
+  fits_close_file(fptr, &status);
+  ASSERT_EQ(status, 0);
+}
+
+void CreateBinaryTableFits(const std::string& path) {
+  fitsfile *fptr = nullptr;
+  int status = 0;
+  std::string filepath = "!" + path;
+  fits_create_file(&fptr, filepath.c_str(), &status);
+  ASSERT_EQ(status, 0);
+  fits_create_img(fptr, BYTE_IMG, 0, nullptr, &status);
+  ASSERT_EQ(status, 0);
+  char* ttype[] = {const_cast<char*>("COL1")};
+  char* tform[] = {const_cast<char*>("1J")};
+  fits_create_tbl(fptr, BINARY_TBL, 0, 1, ttype, tform, nullptr, "TABLE", &status);
+  ASSERT_EQ(status, 0);
+  fits_close_file(fptr, &status);
+  ASSERT_EQ(status, 0);
+}
+
+}  // namespace
+
+TEST(FitsCoverageTest, AllImageTypesViaParseHeader) {
+  struct TypeMapping {
+    int img_type;
+    int expected_datatype;
+    DALIDataType expected_dali_type;
+  };
+
+  const std::vector<TypeMapping> types = {
+    {SBYTE_IMG,      TSBYTE,     DALI_INT8},
+    {BYTE_IMG,       TBYTE,      DALI_UINT8},
+    {SHORT_IMG,      TSHORT,     DALI_INT16},
+    {USHORT_IMG,     TUSHORT,    DALI_UINT16},
+    {LONG_IMG,       TINT,       DALI_INT32},
+    {ULONG_IMG,      TUINT,      DALI_UINT32},
+    {LONGLONG_IMG,   TLONGLONG,  DALI_INT64},
+    {FLOAT_IMG,      TFLOAT,     DALI_FLOAT},
+    {DOUBLE_IMG,     TDOUBLE,    DALI_FLOAT64},
+  };
+
+  for (const auto& m : types) {
+    std::string path = "/tmp/fits_cvg_type_" + std::to_string(m.img_type) + ".fits";
+    CreateSyntheticFitsImage(path, m.img_type, 2, {8, 6});
+
+    auto fptr = FitsHandle::OpenFile(path.c_str(), READONLY);
+    HeaderData header;
+    ParseHeader(header, fptr);
+
+    EXPECT_EQ(header.datatype_code, m.expected_datatype) << "img_type=" << m.img_type;
+    EXPECT_EQ(header.type(), m.expected_dali_type) << "img_type=" << m.img_type;
+    EXPECT_FALSE(header.compressed);
+    EXPECT_EQ(header.shape.shape.size(), 2u);
+    EXPECT_EQ(header.shape.shape[0], 6);
+    EXPECT_EQ(header.shape.shape[1], 8);
+
+    std::remove(path.c_str());
+  }
+}
+
+TEST(FitsCoverageTest, NonImageHDUThrows) {
+  std::string path = "/tmp/fits_cvg_bintable.fits";
+  CreateBinaryTableFits(path);
+
+  auto fptr = FitsHandle::OpenFile(path.c_str(), READONLY);
+  int status = 0;
+  FITS_CALL(fits_movabs_hdu(fptr, 2, nullptr, &status));
+
+  HeaderData header;
+  EXPECT_THROW(ParseHeader(header, fptr), std::exception);
+
+  std::remove(path.c_str());
+}
+
+TEST(FitsCoverageTest, ZeroDimensionImageThrows) {
+  std::string path = "/tmp/fits_cvg_zerodim.fits";
+  CreateSyntheticFitsImage(path, BYTE_IMG, 0, {});
+
+  auto fptr = FitsHandle::OpenFile(path.c_str(), READONLY);
+  HeaderData header;
+  EXPECT_THROW(ParseHeader(header, fptr), std::exception);
+
+  std::remove(path.c_str());
+}
+
+TEST(FitsCoverageTest, UncompressedMultiDimImage) {
+  std::string path = "/tmp/fits_cvg_uncompressed_3d.fits";
+  CreateSyntheticFitsImage(path, FLOAT_IMG, 3, {10, 20, 5});
+
+  auto fptr = FitsHandle::OpenFile(path.c_str(), READONLY);
+  HeaderData header;
+  ParseHeader(header, fptr);
+
+  EXPECT_FALSE(header.compressed);
+  EXPECT_EQ(header.shape.shape.size(), 3u);
+  EXPECT_EQ(header.shape.shape[0], 5);
+  EXPECT_EQ(header.shape.shape[1], 20);
+  EXPECT_EQ(header.shape.shape[2], 10);
+  EXPECT_EQ(header.type(), DALI_FLOAT);
+
+  std::remove(path.c_str());
+}
+
 }  // namespace fits
 }  // namespace dali
