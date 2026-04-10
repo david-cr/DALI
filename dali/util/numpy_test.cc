@@ -2091,6 +2091,87 @@ TEST(NumpyLoaderTest, SkipFunctionErrorCases) {
                std::runtime_error); // Missing closing parenthesis in shape
 }
 
+// Test ParseHeaderItself with header content that does not contain '{'
+// Triggers line 190 DALI_ENFORCE false branch
+TEST(NumpyCoverageTest, ParseHeaderItselfCorruptedHeader) {
+  // Build a valid 10-byte npy prefix: magic(6) + major(1) + minor(1) + header_len(2)
+  // header_len = 6 so (6+10) % 16 == 0
+  std::string npy_data;
+  npy_data += '\x93';
+  npy_data += "NUMPY";       // magic
+  npy_data += '\x01';        // major version 1
+  npy_data += '\x00';        // minor version 0
+  npy_data += '\x06';        // header_len low byte = 6
+  npy_data += '\x00';        // header_len high byte = 0
+  npy_data += "abcdef";      // 6 bytes of header content without '{'
+
+  auto stream = std::make_unique<MockInputStream>(npy_data);
+  HeaderData parsed_header;
+  EXPECT_THROW(ParseHeader(parsed_header, stream.get()), DALIException);
+}
+
+// Test ParseHeader when second Read returns fewer bytes than header_len
+// Triggers line 268 DALI_ENFORCE false branch
+TEST(NumpyCoverageTest, ParseHeaderTruncatedHeaderContent) {
+  // Valid 10-byte prefix with header_len=6, but no header data follows
+  std::string npy_data;
+  npy_data += '\x93';
+  npy_data += "NUMPY";
+  npy_data += '\x01';
+  npy_data += '\x00';
+  npy_data += '\x06';        // header_len = 6
+  npy_data += '\x00';
+  // No additional bytes — second Read will return 0
+
+  auto stream = std::make_unique<MockInputStream>(npy_data);
+  HeaderData parsed_header;
+  EXPECT_THROW(ParseHeader(parsed_header, stream.get()), DALIException);
+}
+
+// Test ReadTensor when the data portion is truncated (fewer bytes than nbytes)
+// Triggers line 306 DALI_ENFORCE false branch
+TEST(NumpyCoverageTest, ReadTensorTruncatedData) {
+  std::string full_file = CreateNumpyFile({2, 3}, DALI_FLOAT, false);
+  // 2*3*sizeof(float)=24 bytes of tensor data; remove 10 to make it short
+  std::string truncated = full_file.substr(0, full_file.size() - 10);
+
+  auto stream = std::make_unique<MockInputStream>(truncated);
+  EXPECT_THROW(ReadTensor(stream.get(), false), DALIException);
+}
+
+// Test ParseODirectHeader read-failure paths (lines 210, 234) using a tiny file
+TEST(NumpyCoverageTest, ParseODirectHeaderReadFailure) {
+  // Build a valid npy file but make it extremely short so ReadAt returns less
+  // than expected, triggering the DALI_ENFORCE at line 210.
+  std::string npy_data;
+  npy_data += '\x93';
+  npy_data += "NUMPY";
+  npy_data += '\x01';
+  npy_data += '\x00';
+  npy_data += '\x06';
+  npy_data += '\x00';
+  npy_data += "abcdef";
+
+  std::string temp_file = GenerateTempPath();
+  {
+    std::ofstream ofs(temp_file, std::ios::binary);
+    ofs.write(npy_data.data(), npy_data.size());
+  }
+
+  try {
+    auto odirect_file = std::make_unique<ODirectFileStream>(temp_file);
+    HeaderData parsed_header;
+    size_t alignment = ODirectFileStream::GetAlignment();
+    size_t len_alignment = ODirectFileStream::GetLenAlignment();
+    EXPECT_THROW(
+        ParseODirectHeader(parsed_header, odirect_file.get(), alignment, len_alignment),
+        DALIException);
+  } catch (const std::exception &e) {
+    GTEST_SKIP() << "O_DIRECT not available: " << e.what();
+  }
+  std::filesystem::remove(temp_file);
+}
+
 }  // namespace numpy
 }  // namespace dali
 
