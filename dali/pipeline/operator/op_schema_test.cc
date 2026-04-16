@@ -583,7 +583,7 @@ DALI_SCHEMA(DummyStateQueries)
   .SupportVolumetric()
   .MakeInternal()
   .MakeDocHidden()
-  .Deprecate("NewOperator", "Use NewOperator instead");
+  .Deprecate("1.0", "NewOperator", "Use NewOperator instead");
 
 // Test IsSequenceOperator (covers line 741)
 TEST(OpSchemaTest, IsSequenceOperator) {

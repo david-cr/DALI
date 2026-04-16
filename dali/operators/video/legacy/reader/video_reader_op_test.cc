@@ -231,17 +231,23 @@ TEST_F(VIDEO_READER_TEST_CLASS, PackedBFrames) {
                                            "/db/video/ucf101_test/packed_bframes_test.avi"})
           .AddOutput("frames", StorageDevice::GPU));
 
-  pipe.Build(this->Outputs());
+  auto test = [&]() {
+    pipe.Build(this->Outputs());
+    Workspace ws;
+    for (int i = 0; i < iterations; ++i) {
+      pipe.Run();
+      pipe.Outputs(&ws);
+      const auto &frames_output = ws.Output<dali::GPUBackend>(0);
+      const auto &frames_shape = frames_output.shape();
 
-  Workspace ws;
-  for (int i = 0; i < iterations; ++i) {
-    pipe.Run();
-    pipe.Outputs(&ws);
-    const auto &frames_output = ws.Output<dali::GPUBackend>(0);
-    const auto &frames_shape = frames_output.shape();
-
-    ASSERT_EQ(frames_shape.size(), batch_size);
-    ASSERT_EQ(frames_shape[0][0], sequence_length);
+      ASSERT_EQ(frames_shape.size(), batch_size);
+      ASSERT_EQ(frames_shape[0][0], sequence_length);
+    }
+  };
+  if (strcmp(VIDEO_READER_OP_STR, "experimental__readers__Video") == 0) {
+    test();
+  } else {
+    EXPECT_THROW(test(), std::runtime_error);
   }
 }
 

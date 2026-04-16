@@ -527,10 +527,15 @@ TEST(ExecGraphTest, ParallelConsumersHighConcurrency) {
   }
   g.Invalidate();
 
-  ThreadPool tp(4, 0, false, "test");
-  n0->env.thread_pool = &tp;
-  n1->env.thread_pool = &tp;
-  n2->env.thread_pool = &tp;
+  // `DummyOpCPU` uses `AddWork/RunAll` internally. In this test `op1` and `op2`
+  // are intentionally runnable in parallel, so sharing one thread pool would
+  // make concurrent submitters race inside `ThreadPool`.
+  ThreadPool tp0(4, 0, false, "test-op0");
+  ThreadPool tp1(4, 0, false, "test-op1");
+  ThreadPool tp2(4, 0, false, "test-op2");
+  n0->env.thread_pool = &tp0;
+  n1->env.thread_pool = &tp1;
+  n2->env.thread_pool = &tp2;
 
   WorkspaceParams params = {};
   params.max_batch_size = batch_size;

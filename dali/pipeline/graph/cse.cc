@@ -44,6 +44,7 @@ std::string OpSpecCSEKey(const OpSpec &spec) {
     // Use a placeholder instead of the real name
     out->set_name(std::to_string(i));
     out->set_device(to_string(spec.OutputDevice(i)));
+    out->set_is_argument_input(false);
   }
 
   auto &schema = spec.GetSchemaOrDefault();
