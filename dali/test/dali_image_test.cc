@@ -1018,6 +1018,77 @@ TEST_F(DaliImageTest, ErrorMessageValidation) {
   }
 }
 
+// Helper template to test WriteBatch with CHW layout for various data types.
+// Exercises the channel-first dispatch branches in WriteBatch.
+template <typename T>
+void TestWriteBatchCHW(DALIDataType dtype, const std::string &suffix) {
+  TensorList<CPUBackend> tl;
+  TensorListShape<> shape(1, 3);
+  shape.set_tensor_shape(0, {3, 2, 2});  // CHW layout: C=3, H=2, W=2
+  tl.Resize(shape, dtype);
+  tl.SetLayout("CHW");
+
+  T *data = tl.template mutable_tensor<T>(0);
+  for (int i = 0; i < 12; ++i) {
+    data[i] = static_cast<T>(i);
+  }
+
+  EXPECT_NO_THROW({
+    WriteBatch(tl, suffix, 0.0f, 1.0f);
+  });
+}
+
+// Test: WriteBatch CHW Layout - int16
+TEST_F(DaliImageTest, WriteBatchCHWLayoutInt16) {
+  TestWriteBatchCHW<int16_t>(DALI_INT16, "chw_int16");
+}
+
+// Test: WriteBatch CHW Layout - int32
+TEST_F(DaliImageTest, WriteBatchCHWLayoutInt32) {
+  TestWriteBatchCHW<int32_t>(DALI_INT32, "chw_int32");
+}
+
+// Test: WriteBatch CHW Layout - int64
+TEST_F(DaliImageTest, WriteBatchCHWLayoutInt64) {
+  TestWriteBatchCHW<int64_t>(DALI_INT64, "chw_int64");
+}
+
+// Test: WriteBatch CHW Layout - float16
+TEST_F(DaliImageTest, WriteBatchCHWLayoutFloat16) {
+  TensorList<CPUBackend> tl;
+  TensorListShape<> shape(1, 3);
+  shape.set_tensor_shape(0, {3, 2, 2});
+  tl.Resize(shape, DALI_FLOAT16);
+  tl.SetLayout("CHW");
+
+  float16 *data = tl.mutable_tensor<float16>(0);
+  for (int i = 0; i < 12; ++i) {
+    data[i] = static_cast<float16>(static_cast<float>(i));
+  }
+
+  EXPECT_NO_THROW({
+    WriteBatch(tl, "chw_float16", 0.0f, 1.0f);
+  });
+}
+
+// Test: WriteBatch CHW Layout - float
+TEST_F(DaliImageTest, WriteBatchCHWLayoutFloat) {
+  TestWriteBatchCHW<float>(DALI_FLOAT, "chw_float");
+}
+
+// Test: WriteBatch with unsupported data type - should silently do nothing
+// Exercises the "all-else" path through the WriteBatch dispatch chain.
+TEST_F(DaliImageTest, WriteBatchUnsupportedDataType) {
+  TensorList<CPUBackend> tl;
+  TensorListShape<> shape(1, 3);
+  shape.set_tensor_shape(0, {2, 2, 3});
+  tl.Resize(shape, DALI_UINT16);  // Not handled in WriteBatch dispatch
+
+  EXPECT_NO_THROW({
+    WriteBatch(tl, "unsupported_type", 0.0f, 1.0f);
+  });
+}
+
 // Test 37: list_files Function Core Logic - Extension and Empty File Filtering
 TEST_F(DaliImageTest, ListFilesCoreLogic) {
   // Remove the image_list.txt file to force ImageList to use list_files function
