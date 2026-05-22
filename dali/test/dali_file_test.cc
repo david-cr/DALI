@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 
 #include "dali/util/file.h"
 #include "dali/util/odirect_file.h"
@@ -2375,6 +2376,16 @@ TEST_F(DaliFileTest, MmapedFileStreamMemoryPressureMMAPFailure) {
 
   // Clean up memory
   memory_blocks.clear();
+}
+
+// Test: MmapedFileStream - ReserveFileMappings returns false when over limit
+// Exercises the "num + reserved > max" branch (line 225) of ReserveFileMappings.
+TEST_F(DaliFileTest, MmapedFileStreamReserveExceedsLimit) {
+  // Use UINT_MAX as the requested count to guarantee exceeding the limit
+  // (dali_max_mv_cnt is system-dependent but never approaches UINT_MAX).
+  bool success = MmapedFileStream::ReserveFileMappings(
+      std::numeric_limits<unsigned int>::max());
+  EXPECT_FALSE(success);
 }
 
 // Test 70: MmapedFileStream - Concurrent MMAP Stress Test
