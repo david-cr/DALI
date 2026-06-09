@@ -81,7 +81,7 @@ class PreemphasisFilterCPUTest : public ::testing::Test {
     }
 
     Workspace ws;
-    ThreadPool tp(1, 0, false, "TestPool");
+    OldThreadPool tp(1, 0, false, "TestPool");
     SetupWorkspace(ws, input, tp);
 
     std::vector<OutputDesc> output_desc;
@@ -202,7 +202,7 @@ TEST_F(PreemphasisFilterCPUTest, UnsupportedInputTypeThrows) {
   std::memset(input->raw_mutable_tensor(0), 0, input->nbytes());
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -232,7 +232,7 @@ TEST_F(PreemphasisFilterCPUTest, BatchProcessing) {
   }
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;

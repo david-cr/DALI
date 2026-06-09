@@ -319,7 +319,7 @@ TEST_F(MelFilterBankCPUTest, EmptyLayoutUsesFallback) {
 
   Workspace ws;
   ws.AddInput(input);
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.SetThreadPool(&tp);
 
   // Setup should succeed and use fallback axis calculation
@@ -349,7 +349,7 @@ TEST_F(MelFilterBankCPUTest, InvalidLayoutThrowsException) {
 
   Workspace ws;
   ws.AddInput(input);
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.SetThreadPool(&tp);
 
   // Setup should fail with DALI_ENFORCE exception
@@ -376,7 +376,7 @@ TEST_F(MelFilterBankCPUTest, UnsupportedDataTypeSetupImpl) {
 
   Workspace ws;
   ws.AddInput(input);
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.SetThreadPool(&tp);
 
   // Setup should fail with DALI_FAIL exception for unsupported type
@@ -402,7 +402,7 @@ TEST_F(MelFilterBankCPUTest, UnsupportedDataTypeRunImpl) {
 
   Workspace ws_setup;
   ws_setup.AddInput(input_valid);
-  ThreadPool tp_setup(1, 0, false, "TestPool");
+  OldThreadPool tp_setup(1, 0, false, "TestPool");
   ws_setup.SetThreadPool(&tp_setup);
 
   std::vector<OutputDesc> output_desc;
@@ -419,7 +419,7 @@ TEST_F(MelFilterBankCPUTest, UnsupportedDataTypeRunImpl) {
 
   Workspace ws;
   ws.AddInput(input);
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.SetThreadPool(&tp);
 
   // Allocate output based on setup
@@ -451,7 +451,7 @@ TEST_F(MelFilterBankCPUTest, EmptyLayout3DTensor) {
 
   Workspace ws;
   ws.AddInput(input);
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.SetThreadPool(&tp);
 
   // Setup should succeed
@@ -479,7 +479,7 @@ TEST_F(MelFilterBankCPUTest, EmptyLayout4DTensor) {
 
   Workspace ws;
   ws.AddInput(input);
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.SetThreadPool(&tp);
 
   // Setup should succeed
@@ -508,7 +508,7 @@ TEST_F(MelFilterBankCPUTest, SuccessfulRunImpl) {
 
   Workspace ws;
   ws.AddInput(input);
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.SetThreadPool(&tp);
 
   // Setup to get output shape

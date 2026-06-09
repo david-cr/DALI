@@ -80,18 +80,18 @@ TEST(ThreadPool, CheckName) {
 
 TEST(ThreadPool, InvalidThreadCount) {
   // Test that constructor throws when thread count is zero
-  ASSERT_THROW(ThreadPool(0, 0, false, "test"), std::exception);
+  ASSERT_THROW(OldThreadPool(0, 0, false, "test"), std::exception);
   // Test that constructor throws when thread count is negative
-  ASSERT_THROW(ThreadPool(-1, 0, false, "test"), std::exception);
+  ASSERT_THROW(OldThreadPool(-1, 0, false, "test"), std::exception);
 }
 
 TEST(ThreadPool, NumThreads) {
-  ThreadPool tp(8, 0, false, "ThreadPool test");
+  OldThreadPool tp(8, 0, false, "OldThreadPool test");
   ASSERT_EQ(tp.NumThreads(), 8);
 }
 
 TEST(ThreadPool, GetThreadIds) {
-  ThreadPool tp(4, 0, false, "ThreadPool test");
+  OldThreadPool tp(4, 0, false, "OldThreadPool test");
   auto thread_ids = tp.GetThreadIds();
   ASSERT_EQ(thread_ids.size(), 4);
   // Check that all thread IDs are unique
@@ -103,28 +103,29 @@ TEST(ThreadPool, GetThreadIds) {
 }
 
 TEST(ThreadPool, RunAllAfterStarted) {
-  ThreadPool tp(4, 0, false, "ThreadPool test");
+  OldThreadPool tp(4, 0, false, "OldThreadPool test");
   std::atomic<int> count{0};
   auto increase = [&count](int thread_id) { count++; };
 
-  // Start work immediately
-  for (int i = 0; i < 10; i++) {
-    tp.AddWork(increase, 0, true);
-  }
-  // Call RunAll after work has already started (tests the started_ branch)
-  tp.RunAll(false);
-
-  // Add more work after started
+  // Queue work and start the pool
   for (int i = 0; i < 10; i++) {
     tp.AddWork(increase);
   }
+  tp.RunAll(false);
+
+  // Add more work after the pool has started (tests the started_ branch in AddWork)
+  for (int i = 0; i < 10; i++) {
+    tp.AddWork(increase);
+  }
+  // Call RunAll again after work has already started (tests the started_ branch in RunAll)
+  tp.RunAll(false);
 
   tp.WaitForWork();
   ASSERT_EQ(count, 20);
 }
 
 TEST(ThreadPool, ExceptionHandling) {
-  ThreadPool tp(2, 0, false, "ThreadPool test");
+  OldThreadPool tp(2, 0, false, "OldThreadPool test");
   std::atomic<int> count{0};
   auto throw_exception = [](int thread_id) {
     throw std::runtime_error("Test exception");
@@ -137,15 +138,15 @@ TEST(ThreadPool, ExceptionHandling) {
 
   tp.RunAll(false);
 
-  // WaitForWork with checkForErrors = true should rethrow the exception
-  ASSERT_THROW(tp.WaitForWork(true), std::runtime_error);
+  // WaitForWork should rethrow the first exception that occurred
+  ASSERT_THROW(tp.WaitForWork(), std::runtime_error);
 
   // Count should still be 2 from the successful tasks
   ASSERT_EQ(count, 2);
 }
 
 TEST(ThreadPool, WaitForWorkNoErrors) {
-  ThreadPool tp(4, 0, false, "ThreadPool test");
+  OldThreadPool tp(4, 0, false, "OldThreadPool test");
   std::atomic<int> count{0};
   auto increase = [&count](int thread_id) { count++; };
 
@@ -154,13 +155,13 @@ TEST(ThreadPool, WaitForWorkNoErrors) {
   }
 
   tp.RunAll(false);
-  // WaitForWork with checkForErrors = false should not throw
-  tp.WaitForWork(false);
+  // No work threw, so WaitForWork should not throw
+  tp.WaitForWork();
   ASSERT_EQ(count, 20);
 }
 
 TEST(ThreadPool, MultipleExceptions) {
-  ThreadPool tp(4, 0, false, "ThreadPool test");
+  OldThreadPool tp(4, 0, false, "OldThreadPool test");
   auto throw_exception = [](int thread_id) {
     throw std::runtime_error("Test exception");
   };
@@ -173,7 +174,7 @@ TEST(ThreadPool, MultipleExceptions) {
   tp.RunAll(false);
 
   // Should throw the first exception that occurred
-  ASSERT_THROW(tp.WaitForWork(true), std::runtime_error);
+  ASSERT_THROW(tp.WaitForWork(), std::runtime_error);
 }
 
 TEST(ThreadPool, AffinityMask) {
@@ -190,7 +191,7 @@ TEST(ThreadPool, AffinityMask) {
   setenv("DALI_AFFINITY_MASK", "0,1,2,3", 1);
 
   // Create thread pool with affinity enabled
-  ThreadPool tp(4, 0, true, "ThreadPool test");
+  OldThreadPool tp(4, 0, true, "OldThreadPool test");
   std::atomic<int> count{0};
   auto increase = [&count](int thread_id) { count++; };
 
@@ -223,7 +224,7 @@ TEST(ThreadPool, AffinityMaskInsufficientEntries) {
   setenv("DALI_AFFINITY_MASK", "0,1", 1);
 
   // Create thread pool with more threads than affinity mask entries
-  ThreadPool tp(4, 0, true, "ThreadPool test");
+  OldThreadPool tp(4, 0, true, "OldThreadPool test");
   std::atomic<int> count{0};
   auto increase = [&count](int thread_id) { count++; };
 

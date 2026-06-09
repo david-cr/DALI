@@ -160,7 +160,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplInt8) {
               data.size() * sizeof(int8_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -190,7 +190,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplUInt16) {
               data.size() * sizeof(uint16_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -220,7 +220,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplUInt32) {
               data.size() * sizeof(uint32_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -250,7 +250,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplInt32) {
               data.size() * sizeof(int32_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -280,7 +280,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplUInt64) {
               data.size() * sizeof(uint64_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -310,7 +310,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplInt64) {
               data.size() * sizeof(int64_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -340,7 +340,7 @@ TEST_F(NonsilenceOperatorCPUTest, UnsupportedTypeThrowsException) {
               data.size() * sizeof(double));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -371,7 +371,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplWithReferencePower) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -404,7 +404,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplBatchSizeGreaterThanOne) {
   }
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -437,7 +437,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplWithReferencePowerBatch) {
   }
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -476,7 +476,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplSmallWindowLength) {
               data.size() * sizeof(uint8_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -516,7 +516,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplLargeWindowLength) {
               data.size() * sizeof(int16_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -558,7 +558,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplMultipleThreads) {
   }
 
   Workspace ws;
-  ThreadPool tp(4, 0, false, "TestPool");  // Match num_threads
+  OldThreadPool tp(4, 0, false, "TestPool");  // Match num_threads
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -597,7 +597,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplResetIntervalMinusOne) {
               data.size() * sizeof(uint16_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -627,7 +627,7 @@ TEST_F(NonsilenceOperatorCPUTest, RunImplVerySmallInput) {
               data.size() * sizeof(uint8_t));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;

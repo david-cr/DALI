@@ -179,7 +179,7 @@ TEST_F(BBoxRotateTest, BasicLTRB_ZeroAngle) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -197,7 +197,7 @@ TEST_F(BBoxRotateTest, BasicLTRB_90DegRotation) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -211,7 +211,7 @@ TEST_F(BBoxRotateTest, BasicLTRB_45DegRotation) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -230,7 +230,7 @@ TEST_F(BBoxRotateTest, BasicXYWH_ZeroAngle) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -244,7 +244,7 @@ TEST_F(BBoxRotateTest, BasicXYWH_45DegRotation) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -263,7 +263,7 @@ TEST_F(BBoxRotateTest, NonNormalizedBboxes) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -278,7 +278,7 @@ TEST_F(BBoxRotateTest, NonNormalizedXYWH) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -296,7 +296,7 @@ TEST_F(BBoxRotateTest, ModeExpand) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -310,7 +310,7 @@ TEST_F(BBoxRotateTest, ModeHalfway) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -324,7 +324,7 @@ TEST_F(BBoxRotateTest, ModeFixed) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -340,7 +340,7 @@ TEST_F(BBoxRotateTest, ModeFixedAspectRatioFlip) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -354,7 +354,7 @@ TEST_F(BBoxRotateTest, ModeHalfwayAspectRatioFlip) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -372,7 +372,7 @@ TEST_F(BBoxRotateTest, KeepSizeTrue) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -404,7 +404,7 @@ TEST_F(BBoxRotateTest, ExplicitSizeArg) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -422,7 +422,7 @@ TEST_F(BBoxRotateTest, AutoComputedCanvas) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -442,7 +442,7 @@ TEST_F(BBoxRotateTest, WithLabels1D_NoRemoval) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspaceWithLabels(ws, boxes, labels, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -466,7 +466,7 @@ TEST_F(BBoxRotateTest, WithLabels1D_WithRemoval) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspaceWithLabels(ws, boxes, labels, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -485,7 +485,7 @@ TEST_F(BBoxRotateTest, WithLabels2D_NoRemoval) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspaceWithLabels(ws, boxes, labels, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -506,7 +506,7 @@ TEST_F(BBoxRotateTest, WithLabels2D_WithRemoval) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspaceWithLabels(ws, boxes, labels, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -528,7 +528,7 @@ TEST_F(BBoxRotateTest, BatchMultipleSamples) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(2, 0, false, "TestPool");
+  OldThreadPool tp(2, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -553,7 +553,7 @@ TEST_F(BBoxRotateTest, BatchWithLabels) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspaceWithLabels(ws, boxes, labels, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -592,7 +592,7 @@ TEST_F(BBoxRotateTest, AngleTensorArgument) {
   angle_tl->mutable_tensor<float>(0)[0] = 45.0f;
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.AddInput(boxes);
   auto out_boxes = std::make_shared<TensorList<CPUBackend>>();
   ws.AddOutput(out_boxes);
@@ -637,7 +637,7 @@ TEST_F(BBoxRotateTest, InputShapeTensorArgument) {
   shape_data[1] = 640;  // W
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.AddInput(boxes);
   auto out_boxes = std::make_shared<TensorList<CPUBackend>>();
   ws.AddOutput(out_boxes);
@@ -682,7 +682,7 @@ TEST_F(BBoxRotateTest, SizeTensorArgInt32) {
   data[1] = 700;  // W
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.AddInput(boxes);
   auto out_boxes = std::make_shared<TensorList<CPUBackend>>();
   ws.AddOutput(out_boxes);
@@ -723,7 +723,7 @@ TEST_F(BBoxRotateTest, SizeTensorArgInt64) {
   data[1] = 700;
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.AddInput(boxes);
   auto out_boxes = std::make_shared<TensorList<CPUBackend>>();
   ws.AddOutput(out_boxes);
@@ -764,7 +764,7 @@ TEST_F(BBoxRotateTest, SizeTensorArgUInt32) {
   data[1] = 700;
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.AddInput(boxes);
   auto out_boxes = std::make_shared<TensorList<CPUBackend>>();
   ws.AddOutput(out_boxes);
@@ -805,7 +805,7 @@ TEST_F(BBoxRotateTest, SizeTensorArgFloat) {
   data[1] = 700.5f;
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   ws.AddInput(boxes);
   auto out_boxes = std::make_shared<TensorList<CPUBackend>>();
   ws.AddOutput(out_boxes);
@@ -829,7 +829,7 @@ TEST_F(BBoxRotateTest, ShapeLayoutHWC) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -844,7 +844,7 @@ TEST_F(BBoxRotateTest, ShapeLayoutWH) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -908,7 +908,7 @@ TEST_F(BBoxRotateTest, InvalidBoxShape1D) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, tl, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -929,7 +929,7 @@ TEST_F(BBoxRotateTest, InvalidLabelShape) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspaceWithLabels(ws, boxes, labels, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -944,7 +944,7 @@ TEST_F(BBoxRotateTest, LabelCountMismatch) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspaceWithLabels(ws, boxes, labels, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -975,7 +975,7 @@ TEST_F(BBoxRotateTest, KeepSizeWithSizeMutuallyExclusive) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -1003,7 +1003,7 @@ TEST_F(BBoxRotateTest, SizeListWrongLength) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -1022,7 +1022,7 @@ TEST_F(BBoxRotateTest, EmptyBoxes) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -1045,7 +1045,7 @@ TEST_F(BBoxRotateTest, ManyBoxes) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -1059,7 +1059,7 @@ TEST_F(BBoxRotateTest, FullRotation360) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -1073,7 +1073,7 @@ TEST_F(BBoxRotateTest, NegativeAngle) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -1088,7 +1088,7 @@ TEST_F(BBoxRotateTest, RemoveThresholdZero) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -1106,7 +1106,7 @@ TEST_F(BBoxRotateTest, RemoveThresholdHigh) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -1124,7 +1124,7 @@ TEST_F(BBoxRotateTest, NormalizedXYWH_ModeFixed) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -1138,7 +1138,7 @@ TEST_F(BBoxRotateTest, NormalizedXYWH_ModeHalfway) {
   auto op = InstantiateOperator(spec);
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, boxes, tp);
 
   std::vector<OutputDesc> output_desc;

@@ -67,7 +67,7 @@ TEST_F(DumpImageCPUTest, RunImplRGB) {
   std::memset(input->raw_mutable_tensor(0), 128, input->nbytes());
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -89,7 +89,7 @@ TEST_F(DumpImageCPUTest, RunImplGrayscale) {
   std::memset(input->raw_mutable_tensor(0), 64, input->nbytes());
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -111,7 +111,7 @@ TEST_F(DumpImageCPUTest, RunImplWrongNdimThrows) {
   std::memset(input->raw_mutable_tensor(0), 0, input->nbytes());
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -133,7 +133,7 @@ TEST_F(DumpImageCPUTest, RunImplWrongChannelsThrows) {
   std::memset(input->raw_mutable_tensor(0), 0, input->nbytes());
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -155,7 +155,7 @@ TEST_F(DumpImageCPUTest, RunImplFourChannelsThrows) {
   std::memset(input->raw_mutable_tensor(0), 0, input->nbytes());
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;

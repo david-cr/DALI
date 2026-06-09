@@ -530,9 +530,9 @@ TEST(ExecGraphTest, ParallelConsumersHighConcurrency) {
   // `DummyOpCPU` uses `AddWork/RunAll` internally. In this test `op1` and `op2`
   // are intentionally runnable in parallel, so sharing one thread pool would
   // make concurrent submitters race inside `ThreadPool`.
-  ThreadPool tp0(4, 0, false, "test-op0");
-  ThreadPool tp1(4, 0, false, "test-op1");
-  ThreadPool tp2(4, 0, false, "test-op2");
+  OldThreadPool tp0(4, 0, false, "test-op0");
+  OldThreadPool tp1(4, 0, false, "test-op1");
+  OldThreadPool tp2(4, 0, false, "test-op2");
   n0->env.thread_pool = &tp0;
   n1->env.thread_pool = &tp1;
   n2->env.thread_pool = &tp2;
@@ -615,7 +615,7 @@ TEST(ExecGraphTest, ComplexGraphTopology) {
   LimitBackendConcurrency(g, OpType::CPU);
 
   WorkspaceParams params = {};
-  auto tp = std::make_unique<ThreadPool>(std::thread::hardware_concurrency(), 0, false, "test");
+  auto tp = std::make_unique<OldThreadPool>(std::thread::hardware_concurrency(), 0, false, "test");
   ExecEnv env;
   env.thread_pool = tp.get();
   params.env = &env;
@@ -693,7 +693,7 @@ TEST(ExecGraphTest, PinnedBuffersWithMixedOps) {
   n2->env.order = s2;
   no->env.order = s3;
 
-  ThreadPool tp(4, 0, false, "test");
+  OldThreadPool tp(4, 0, false, "test");
   n0->env.thread_pool = &tp;
 
   LimitBackendConcurrency(g, OpType::CPU);
@@ -732,7 +732,7 @@ TEST(ExecGraphTest, CPUOnlyGraphNoPinning) {
   LimitBackendConcurrency(g, OpType::CPU);
 
   // Verify that without GPU buffers, outputs are not pinned
-  ThreadPool tp(std::thread::hardware_concurrency(), 0, false, "test");
+  OldThreadPool tp(std::thread::hardware_concurrency(), 0, false, "test");
   WorkspaceParams params = {};
   ExecEnv env;
   env.thread_pool = &tp;
@@ -808,7 +808,7 @@ TEST(ExecGraphTest, MultipleConsumersConcurrency) {
   LimitBackendConcurrency(g, OpType::CPU);
 
   WorkspaceParams params = {};
-  auto tp = std::make_unique<ThreadPool>(std::thread::hardware_concurrency(), 0, false, "test");
+  auto tp = std::make_unique<OldThreadPool>(std::thread::hardware_concurrency(), 0, false, "test");
   ExecEnv env;
   env.thread_pool = tp.get();
   params.env = &env;
@@ -881,7 +881,7 @@ TEST(ExecGraphTest, HasParallelConsumersDifferentSemaphores) {
   n1->concurrency = sem1;
   n2->concurrency = sem2;  // Different semaphore!
 
-  ThreadPool tp(4, 0, false, "test");
+  OldThreadPool tp(4, 0, false, "test");
   n0->env.thread_pool = &tp;
   n1->env.thread_pool = &tp;
   n2->env.thread_pool = &tp;
@@ -971,7 +971,7 @@ TEST(ExecGraphTest, PassThroughOperatorPinning) {
   n3->env.order = s3;
   no->env.order = s4;
 
-  ThreadPool tp(4, 0, false, "test");
+  OldThreadPool tp(4, 0, false, "test");
   n0->env.thread_pool = &tp;
   n1->env.thread_pool = &tp;
 
@@ -1073,7 +1073,7 @@ TEST(ExecGraphTest, PassThroughOperatorWithAlreadyPinnedInput) {
   n3->env.order = s3;
   no->env.order = s4;
 
-  ThreadPool tp(4, 0, false, "test");
+  OldThreadPool tp(4, 0, false, "test");
   n0->env.thread_pool = &tp;
   n2->env.thread_pool = &tp;
 
@@ -1149,7 +1149,7 @@ TEST(ExecGraphTest, MalformedGraphNullSemaphore) {
   g.Link(n1, 0, no, 0);
   g.Link(n2, 0, no, 1);
 
-  ThreadPool tp(4, 0, false, "test");
+  OldThreadPool tp(4, 0, false, "test");
   n0->env.thread_pool = &tp;
   n1->env.thread_pool = &tp;
   n2->env.thread_pool = &tp;
@@ -1237,7 +1237,7 @@ TEST(ExecGraphTest, PassThroughOperatorWithNonCPUInputDevice) {
   n2->env.order = s2;
   no->env.order = s3;
 
-  ThreadPool tp(4, 0, false, "test");
+  OldThreadPool tp(4, 0, false, "test");
   n0->env.thread_pool = &tp;
   n1->env.thread_pool = &tp;
 
@@ -1335,7 +1335,7 @@ TEST(ExecGraphTest, PassThroughOperatorSkipAlreadyPinned) {
   n3->env.order = s3;
   no->env.order = s4;
 
-  ThreadPool tp(4, 0, false, "test");
+  OldThreadPool tp(4, 0, false, "test");
   n0->env.thread_pool = &tp;
   n2->env.thread_pool = &tp;
 

@@ -147,7 +147,7 @@ TEST_F(MFCCCPUTest, SetupImpl2DTensor) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -170,7 +170,7 @@ TEST_F(MFCCCPUTest, SetupImpl3DTensor) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -193,7 +193,7 @@ TEST_F(MFCCCPUTest, SetupImpl4DTensor) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -226,7 +226,7 @@ TEST_F(MFCCCPUTest, InvalidAxisThrowsException) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -249,7 +249,7 @@ TEST_F(MFCCCPUTest, UnsupportedDataTypeSetupImpl) {
               data.size() * sizeof(double));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -272,7 +272,7 @@ TEST_F(MFCCCPUTest, UnsupportedDimensionsSetupImpl) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -295,7 +295,7 @@ TEST_F(MFCCCPUTest, SuccessfulRunImpl2D) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   // Setup determines output shape
@@ -335,7 +335,7 @@ TEST_F(MFCCCPUTest, SuccessfulRunImplWithLifter) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   // Setup determines output shape
@@ -375,7 +375,7 @@ TEST_F(MFCCCPUTest, SuccessfulRunImplWithLifter3D) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   // Setup determines output shape
@@ -415,7 +415,7 @@ TEST_F(MFCCCPUTest, SuccessfulRunImplWithLifter4D) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   // Setup determines output shape
@@ -445,7 +445,7 @@ TEST_F(MFCCCPUTest, SuccessfulRunImpl3D) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   // Setup determines output shape
@@ -475,7 +475,7 @@ TEST_F(MFCCCPUTest, SuccessfulRunImpl4D) {
               data.size() * sizeof(float));
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   // Setup determines output shape

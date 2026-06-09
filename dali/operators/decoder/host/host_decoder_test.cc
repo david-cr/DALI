@@ -64,7 +64,7 @@ TEST_F(HostDecoderTest, WrongNdimThrows) {
   std::memset(input->raw_mutable_tensor(0), 0, input->nbytes());
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
@@ -86,7 +86,7 @@ TEST_F(HostDecoderTest, WrongTypeThrows) {
   std::memset(input->raw_mutable_tensor(0), 0, input->nbytes());
 
   Workspace ws;
-  ThreadPool tp(1, 0, false, "TestPool");
+  OldThreadPool tp(1, 0, false, "TestPool");
   SetupWorkspace(ws, input, tp);
 
   std::vector<OutputDesc> output_desc;
