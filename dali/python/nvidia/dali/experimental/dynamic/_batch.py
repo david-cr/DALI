@@ -19,7 +19,7 @@ from collections.abc import Iterator
 import nvidia.dali.backend as _backend
 import nvidia.dali.types as _dali_types
 import nvidia.dali._tensor_formatting as _tensor_formatting
-import nvtx
+from ._nvtx import NVTXRange
 from nvidia.dali._typing import BatchLike, TensorLike
 
 from . import _eval_mode, _invocation
@@ -164,6 +164,42 @@ class Batch:
 
     In case of lazy evaluation, the operations are executed only after an attempt is made to access
     the tensor data or properties which cannot be obtained without running the underlying operation.
+
+    .. warning::
+        :class:`Batch` objects should not be constructed directly, use :func:`batch` or
+        :func:`as_batch` instead.
+
+    The batch object can be created either from an existing object, passed as `tensors` or
+    from an invocation result.
+    Unless explicitly requested with the `copy` parameter, this constructor will make best
+    effort to avoid the copy.
+
+    Parameters
+    ----------
+    tensors : TensorLike, default: None
+        The data to construct the batch from. It can be a list of tensors, a TensorList,
+        or other supported types. If None, the batch is constructed from an invocation result.
+        Supported types are:
+
+        - a list of tensor-like objects; the objects need to have matching number of dimensions,
+          data types and layouts,
+        - a tensor-like object; the outermost dimension is interpreted as the batch dimension
+        - a dali.backend.TensorListCPU or dali.backend.TensorListGPU
+    dtype : DType, default: None
+        The desired data type of the batch. If not specified, the data type is inferred
+        from the input tensors. If specified, the input tensors are cast to the desired
+        data type. The `dtype` is required if `tensors` are an empty list.
+    device : Device or str, optional, default: None
+        The device on which the batch should reside (e.g., "cpu" or "gpu").
+        If not specified, the device is inferred from the input tensors.
+    layout : str, optional, default: None
+        The layout string describing the dimensions of the batch (e.g., "HWC").
+        If not specified, the layout is inferred from the input tensors.
+    invocation_result : _invocation.InvocationResult, default: None
+        The result of a DALI operator invocation, used for lazy evaluation.
+    copy : bool, optional, default: False
+        If True, the input tensors are copied. If False, the constructor will avoid
+        copying data when possible.
     """
 
     def __init__(
@@ -175,44 +211,6 @@ class Batch:
         invocation_result: _invocation.InvocationResult | None = None,
         copy: bool = False,
     ):
-        """Constructs a :class:`Batch` object.
-
-        .. warning::
-            :class:`Batch` objects should not be constructed directly, use :meth:`batch` or
-            :meth:`as_batch` instead.
-
-        The batch object can be created either from an existing object, passed as `tensors` or
-        from an invocation result.
-        Unless explicitly requested with the `copy` parameter, this constructor will make best
-        effort to avoid the copy.
-
-        Parameters
-        ----------
-        tensors : TensorLike, default: None
-            The data to construct the batch from. It can be a list of tensors, a TensorList,
-            or other supported types. If None, the batch is constructed from an invocation result.
-            Supported types are:
-
-            - a list of tensor-like objects; the objects need to have matching number of dimensions,
-            data types and layouts,
-            - a tensor-like object; the outermost dimension is interpreted as the batch dimension
-            - a dali.backend.TensorListCPU or dali.backend.TensorListGPU
-        dtype : DType, default: None
-            The desired data type of the batch. If not specified, the data type is inferred
-            from the input tensors. If specified, the input tensors are cast to the desired
-            data type. The `dtype` is required if `tensors` are an empty list.
-        device : Device or str, optional, default: None
-            The device on which the batch should reside (e.g., "cpu" or "gpu").
-            If not specified, the device is inferred from the input tensors.
-        layout : str, optional, default: None
-            The layout string describing the dimensions of the batch (e.g., "HWC").
-            If not specified, the layout is inferred from the input tensors.
-        invocation_result : _invocation.InvocationResult, default: None
-            The result of a DALI operator invocation, used for lazy evaluation
-        copy : bool, optional, default: False
-            If True, the input tensors are copied. If False, the constructor will avoid
-            copying data when possible.
-        """
         assert isinstance(layout, str) or layout is None
         if device is not None and not isinstance(device, Device):
             device = _device(device)
@@ -367,6 +365,7 @@ class Batch:
         return self._wraps_external_data
 
     @staticmethod
+    @NVTXRange("broadcast", category="batch")
     def broadcast(
         sample: TensorLike,
         batch_size: int,
@@ -395,7 +394,7 @@ class Batch:
             return Batch(tl_type.broadcast(t._storage, batch_size))
         import numpy as np
 
-        with nvtx.annotate("to numpy and stack", domain="batch"):
+        with NVTXRange("to numpy and stack", category="batch"):
             arr = np.array(sample)
             converted_dtype_id = None
             if arr.dtype == np.float64:
@@ -410,11 +409,11 @@ class Batch:
                 arr = arr.astype(_dali_types.to_numpy_type(dtype.type_id))
             arr = np.repeat(arr[np.newaxis], batch_size, axis=0)
 
-        with nvtx.annotate("to backend", domain="batch"):
+        with NVTXRange("to backend", category="batch"):
             tl = _backend.TensorListCPU(arr)
             if converted_dtype_id is not None:
                 tl.reinterpret(converted_dtype_id)
-        with nvtx.annotate("create batch", domain="batch"):
+        with NVTXRange("create batch", category="batch"):
             return Batch(tl, device=device, dtype=dtype)
 
     @property

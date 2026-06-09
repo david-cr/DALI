@@ -11,17 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import numpy as np
 import jax
 import jax.dlpack
 import jax.numpy as jnp
-from jax.sharding import NamedSharding, PositionalSharding, Sharding
+from jax.sharding import NamedSharding, Sharding
 
 from nvidia.dali.plugin.base_iterator import _DaliBaseIterator
 from nvidia.dali.plugin.base_iterator import LastBatchPolicy
 from nvidia.dali.pipeline import pipeline_def
 from nvidia.dali.pipeline import Pipeline, DataNode
 
-from nvidia.dali.plugin.jax.integration import _to_jax_array
+from nvidia.dali.plugin.jax.integration import _to_jax_array, _jax_device
 
 from typing import Union, Optional, Callable, Type, Dict, List, Tuple
 
@@ -85,6 +86,14 @@ class DALIGenericIterator(_DaliBaseIterator):
                 `jax.sharding.Sharding` compatible object that, if present, will be used to
                 build an output jax.Array for each category. If ``None``, the iterator returns
                 values compatible with pmapped JAX functions, if multiple pipelines are provided.
+    pmap_compatible : bool, optional, default = None
+                Controls whether the iterator produces outputs with a leading device axis
+                compatible with ``jax.pmap``. When ``None`` (default), it is inferred
+                automatically: ``True`` when ``devices`` is provided, ``False`` otherwise.
+                Set to ``True`` explicitly to force pmap-compatible output (shape
+                ``[num_devices, batch_per_device, ...]``) without using the ``devices``
+                argument. Set to ``False`` to suppress the device axis even when ``devices``
+                is provided.
 
     Example
     -------
@@ -117,6 +126,7 @@ class DALIGenericIterator(_DaliBaseIterator):
         last_batch_policy: LastBatchPolicy = LastBatchPolicy.FILL,
         prepare_first_batch: bool = True,
         sharding: Optional[Sharding] = None,
+        pmap_compatible: Optional[bool] = None,
     ):
         # check the assert first as _DaliBaseIterator would run the prefetch
         if len(set(output_map)) != len(output_map):
@@ -126,9 +136,13 @@ class DALIGenericIterator(_DaliBaseIterator):
 
         if sharding is not None:
             assert isinstance(
-                sharding, (NamedSharding, PositionalSharding)
-            ), "`sharding` should be an instance of `NamedSharding` or `PositionalSharding`"
+                sharding, Sharding
+            ), "`sharding` should be an instance of `jax.sharding.Sharding`"
         self._sharding = sharding
+
+        # When pmap_compatible is None (default), auto-infer: False for single-pipeline
+        # iterators. _data_iterator_impl sets True automatically when devices are provided.
+        self._pmap_compatible = pmap_compatible if pmap_compatible is not None else False
 
         assert (
             last_batch_policy != LastBatchPolicy.PARTIAL
@@ -169,7 +183,7 @@ class DALIGenericIterator(_DaliBaseIterator):
         for category_id, category_name in enumerate(self.output_map):
             category_outputs = self._gather_outputs_for_category(pipelines_outputs, category_id)
 
-            if self._num_gpus == 1 and self._sharding is None:
+            if self._num_gpus == 1 and self._sharding is None and not self._pmap_compatible:
                 next_output[category_name] = category_outputs[0]
             else:
                 self._assert_shards_shapes(category_outputs)
@@ -202,27 +216,32 @@ class DALIGenericIterator(_DaliBaseIterator):
         return category_outputs
 
     def _build_output_with_device_put(self, next_output, category_name, category_outputs):
-        """Builds sharded jax.Array with `jax.device_put_sharded`. This output is compatible
-        with pmapped JAX functions.
-        """
-        category_outputs_devices = tuple(
-            map(lambda jax_shard: jax_shard.device(), category_outputs)
-        )
+        """Builds sharded jax.Array from per-device shards using make_array_from_
+        single_device_arrays."""
+        category_outputs_devices = tuple(_jax_device(jax_shard) for jax_shard in category_outputs)
 
         distinct_category_outputs_devices = set(category_outputs_devices)
 
         if len(category_outputs_devices) != len(distinct_category_outputs_devices):
             if len(distinct_category_outputs_devices) != 1:
                 raise AssertionError(
-                    "JAX iterator requires shards to be placed on \
-                                                different devices or all on the same device."
+                    "JAX iterator requires shards to be placed on "
+                    "different devices or all on the same device."
                 )
             else:
                 # All shards are on one device (CPU or one GPU)
                 return jnp.stack(category_outputs)
         else:
-            # Build sharded JAX array as output for current category (compatible with pmap)
-            return jax.device_put_sharded(category_outputs, category_outputs_devices)
+            # Build sharded JAX array as output for current category (compatible with pmap).
+            # Use stacked shape (num_devices, batch_per_device, ...) so that
+            # arr[device_id] returns the shard for that device, matching
+            # the behaviour of the deprecated jax.device_put_sharded.
+            devices_arr = np.array(list(category_outputs_devices))
+            mesh = jax.sharding.Mesh(devices_arr, axis_names=("device",))
+            sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("device"))
+            global_shape = (len(category_outputs), *category_outputs[0].shape)
+            expanded_shards = [jnp.expand_dims(s, 0) for s in category_outputs]
+            return jax.make_array_from_single_device_arrays(global_shape, sharding, expanded_shards)
 
     def _build_output_with_sharding(self, category_outputs):
         """Builds sharded jax.Array with `jax.make_array_from_single_device_arrays`.
@@ -231,9 +250,10 @@ class DALIGenericIterator(_DaliBaseIterator):
         shard_shape = category_outputs[0].shape
 
         if isinstance(self._sharding, NamedSharding):
-            global_shape = (self._sharding.mesh.size * shard_shape[0], *shard_shape[1:])
+            num_devices = self._sharding.mesh.size
         else:
-            global_shape = (self._sharding.shape[0] * shard_shape[0], *shard_shape[1:])
+            num_devices = len(self._sharding.device_set)
+        global_shape = (num_devices * shard_shape[0], *shard_shape[1:])
 
         return jax.make_array_from_single_device_arrays(
             global_shape, self._sharding, category_outputs
@@ -269,6 +289,7 @@ def _data_iterator_impl(
     prepare_first_batch: bool = True,
     sharding: Optional[Sharding] = None,
     devices: Optional[List[jax.Device]] = None,
+    pmap_compatible: Optional[bool] = None,
 ):
     """Implementation of the data_iterator decorator. It is extracted to a separate function
     to be reused by the peekable iterator decorator.
@@ -302,6 +323,7 @@ def _data_iterator_impl(
                     last_batch_padded=last_batch_padded,
                     last_batch_policy=last_batch_policy,
                     prepare_first_batch=prepare_first_batch,
+                    pmap_compatible=pmap_compatible,
                 )
             else:
                 pipelines = []
@@ -356,8 +378,14 @@ def _data_iterator_impl(
                         last_batch_policy=last_batch_policy,
                         prepare_first_batch=prepare_first_batch,
                         sharding=sharding,
+                        pmap_compatible=pmap_compatible,
                     )
                 elif devices is not None:
+                    # Auto-enable pmap_compatible when devices are provided, unless the user
+                    # explicitly overrode it.
+                    effective_pmap_compatible = (
+                        pmap_compatible if pmap_compatible is not None else True
+                    )
                     return iterator_type(
                         pipelines=pipelines,
                         output_map=output_map,
@@ -367,6 +395,7 @@ def _data_iterator_impl(
                         last_batch_padded=last_batch_padded,
                         last_batch_policy=last_batch_policy,
                         prepare_first_batch=prepare_first_batch,
+                        pmap_compatible=effective_pmap_compatible,
                     )
 
                 raise AssertionError(
@@ -389,6 +418,7 @@ def data_iterator(
     prepare_first_batch: bool = True,
     sharding: Optional[Sharding] = None,
     devices: Optional[List[jax.Device]] = None,
+    pmap_compatible: Optional[bool] = None,
 ):
     """Decorator for DALI iterator for JAX. Decorated function when called returns DALI
     iterator for JAX.
@@ -464,6 +494,14 @@ def data_iterator(
                 return outputs compatible with pmapped JAX functions.
                 This argument is  mutually exclusive with `sharding` argument. If `sharding`
                 is provided, `devices` should be set to None.
+    pmap_compatible : bool, optional, default = None
+                Controls whether the iterator produces outputs with a leading device axis
+                compatible with ``jax.pmap``. When ``None`` (default), it is inferred
+                automatically: ``True`` when ``devices`` is provided, ``False`` otherwise.
+                Set to ``True`` explicitly to force pmap-compatible output (shape
+                ``[num_devices, batch_per_device, ...]``) without using the ``devices``
+                argument. Set to ``False`` to suppress the device axis even when ``devices``
+                is provided.
     checkpoints : list of str, optional, default = None
                 Checkpoints obtained with `.checkpoints()` method of the iterator.
                 If provided, they will be used to restore the state of the pipelines.
@@ -499,4 +537,5 @@ def data_iterator(
         prepare_first_batch,
         sharding,
         devices,
+        pmap_compatible,
     )

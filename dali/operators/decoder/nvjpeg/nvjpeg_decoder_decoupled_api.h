@@ -39,7 +39,9 @@
 #include "dali/pipeline/operator/operator.h"
 #include "dali/pipeline/util/thread_pool.h"
 #include "dali/util/image.h"
+#if NVML_ENABLED
 #include "dali/util/nvml.h"
+#endif
 #include "dali/util/ocv.h"
 
 #define NVJPEG_FLAT_VERSION(major, minor, patch) ((major)*1000000+(minor)*1000+(patch))
@@ -1150,8 +1152,8 @@ class nvJPEGDecoder : public StatelessOperator<MixedBackend>, CachedDecoderImpl 
   nvjpegDevAllocator_t device_allocator_;
   nvjpegPinnedAllocator_t pinned_allocator_;
 
-  ThreadPool thread_pool_;
-  ThreadPool nvjpeg2k_thread_;
+  OldThreadPool thread_pool_;
+  OldThreadPool nvjpeg2k_thread_;
   static constexpr int kOutputDim = 3;
 
   TensorList<CPUBackend> hw_decoder_images_staging_;

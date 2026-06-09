@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2019-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,7 +28,6 @@ import sys
 import tempfile
 from packaging.version import Version
 from nose_utils import SkipTest
-
 
 is_of_supported_var = None
 
@@ -257,6 +256,7 @@ def check_batch(
     max_allowed_error=None,
     expected_layout=None,
     compare_layouts=True,
+    dump_artifacts=True,
 ):
     """Compare two batches of data, be it dali TensorList or list of numpy arrays.
 
@@ -357,7 +357,8 @@ def check_batch(
                 filename = (
                     batch1[i].source_info() if hasattr(batch1[i], "source_info") else f"unknown{i}"
                 )
-                dump_as_core_artifacts(filename, left, right, sample_idx=i)
+                if dump_artifacts:
+                    dump_as_core_artifacts(filename, left, right, sample_idx=i)
                 assert False, error_msg
 
 
@@ -370,6 +371,7 @@ def compare_pipelines(
     max_allowed_error=None,
     expected_layout=None,
     compare_layouts=True,
+    dump_artifacts=True,
 ):
     """Compare the outputs of two pipelines across several iterations.
 
@@ -403,6 +405,7 @@ def compare_pipelines(
                 max_allowed_error,
                 expected_layout=current_expected_layout,
                 compare_layouts=compare_layouts,
+                dump_artifacts=dump_artifacts,
             )
 
 
@@ -1009,14 +1012,12 @@ def create_sign_off_registry():
         with its own operator tracking. Multiple references to the same instance
         share the same registry.
     """
-    _tested_ops = []
+    _tested_ops = set()
 
     class SignOff:
         def __call__(self, *op_names):
             """Use as decorator: @sign_off("operator_name")"""
-            assert all(isinstance(op_name, str) for op_name in op_names)
-            assert len(op_names)
-            _tested_ops.extend(op_names)
+            self.register_test(*op_names)
 
             def dummy(fn):
                 return fn
@@ -1027,11 +1028,11 @@ def create_sign_off_registry():
             """Use directly in test: sign_off.register_test("operator_name")"""
             assert all(isinstance(op_name, str) for op_name in op_names)
             assert len(op_names)
-            _tested_ops.extend(op_names)
+            _tested_ops.update(op_names)
 
         @property
         def tested_ops(self):
-            return set(_tested_ops)
+            return _tested_ops
 
     return SignOff()
 

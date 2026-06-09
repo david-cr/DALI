@@ -13,20 +13,20 @@
 # limitations under the License.
 
 import threading
+import weakref
 from typing import TYPE_CHECKING, Any, Optional
-
-import nvtx
 
 from ._async import _Future
 from ._device import Device
 from ._eval_context import EvalContext as _EvalContext
 from ._eval_mode import EvalMode as _EvalMode
 from ._exceptions import capture_stack, rethrow_exception
+from ._nvtx import NVTXRange
 from ._type import DType
 from nvidia.dali import backend as _b
 
 if TYPE_CHECKING:
-    from .ops import Operator
+    from ._ops import Operator
 
 
 class Invocation:
@@ -50,7 +50,7 @@ class Invocation:
         is_batch: bool = False,
         batch_size: Optional[int] = None,
         previous_invocation: Optional["Invocation"] = None,
-        caller_depth: int = 4,
+        caller_depth: int | None = None,
     ):
         """
         Parameters
@@ -90,20 +90,21 @@ class Invocation:
         self._eval_mode: _EvalMode | None = None
         self._future: Optional[_Future] = None
         self._run_lock = threading.Lock()
-        self._call_stack = (
-            capture_stack(caller_depth + 1)
-            if _EvalMode.current().value <= _EvalMode.eager.value
-            else None
-        )
+        if caller_depth is not None and _EvalMode.current().value <= _EvalMode.eager.value:
+            self._call_stack = capture_stack(caller_depth + 1)
+        else:
+            self._call_stack = None
 
-    def __del__(self):
-        self._return_op_to_cache()
+        if hasattr(self._operator, "_cache"):
+            self._return_op_to_cache = weakref.finalize(
+                self, Invocation._return_op_to_cache_impl, self._operator
+            )
+        else:
+            self._return_op_to_cache = None
 
-    def _return_op_to_cache(self):
-        if (cache := getattr(self._operator, "_cache", None)) is not None:
-            cache[self._operator._key] = self._operator
-        self._operator = None
-        self._return_op_to_cache = lambda: None
+    @staticmethod
+    def _return_op_to_cache_impl(op):
+        op._cache[op._key] = op
 
     def device(self, result_index: int):
         if self._output_devices is None:
@@ -129,16 +130,16 @@ class Invocation:
             self.run(self._eval_context)
         return self._results[result_index].dtype
 
+    @NVTXRange("Invocation.batch_size", category="invocation")
     def batch_size(self, result_index: int):
-        with nvtx.annotate("Invocation.batch_size", domain="invocation"):
-            if not self._is_batch:
-                return None
-            if self._batch_size is not None:
-                return self._batch_size
-            if self._results is None:
-                # TODO(michalz): Try to get batch_size without full evaluation.
-                self.run(self._eval_context)
-            return self._results[result_index].batch_size if self._is_batch else None
+        if not self._is_batch:
+            return None
+        if self._batch_size is not None:
+            return self._batch_size
+        if self._results is None:
+            # TODO(michalz): Try to get batch_size without full evaluation.
+            self.run(self._eval_context)
+        return self._results[result_index].batch_size if self._is_batch else None
 
     def layout(self, result_index: int):
         if self._results is None:
@@ -198,7 +199,7 @@ class Invocation:
     def run(self, ctx: Optional[_EvalContext] = None):
         """Executes the operator immediately."""
         if future := self._future:
-            with nvtx.annotate("Invocation.wait", domain="invocation"):
+            with NVTXRange("Invocation.wait", category="invocation"):
                 future.wait()
             self._future = None
         else:
@@ -212,6 +213,7 @@ class Invocation:
                     rethrow_exception(exception, self._call_stack, self._eval_mode)
                 raise
 
+    @NVTXRange("Invocation.schedule", category="invocation")
     def schedule(self, ctx: Optional[_EvalContext] = None):
         """Schedule the asynchronous execution of the operator"""
 
@@ -249,7 +251,7 @@ class Invocation:
         if self._results is not None:
             return
 
-        with nvtx.annotate("Invocation.run", domain="invocation"):
+        with NVTXRange("Invocation.run", category="invocation"):
             # If the invocation was created with a GPU device, validate that
             # the evaluation context matches.
             if (
@@ -305,7 +307,9 @@ class Invocation:
                     assert output_device(self._results[i]) == d
 
             ctx.cache_results(self, self._results)
-            self._return_op_to_cache()  # the operator instance is ready for a new invocation
+            if self._return_op_to_cache:
+                self._return_op_to_cache()  # the operator instance is ready for a new invocation
+            self._operator = None
 
     def values(self, ctx: Optional[_EvalContext] = None):
         """

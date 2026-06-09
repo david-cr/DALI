@@ -124,7 +124,7 @@ class SliceSynthDataPipeline(Pipeline):
         data = self.iterator.next()
         self.feed_input(self.data, data, layout=self.layout)
 
-        (crop_pos, crop_size) = self.pos_size_iter.next()
+        crop_pos, crop_size = self.pos_size_iter.next()
         self.feed_input(self.crop_pos, crop_pos)
         self.feed_input(self.crop_size, crop_size)
 
@@ -185,7 +185,7 @@ class SlicePipeline(Pipeline):
         return images
 
     def iter_setup(self):
-        (crop_pos, crop_size) = self.pos_size_iter.next()
+        crop_pos, crop_size = self.pos_size_iter.next()
         self.feed_input(self.crop_pos, crop_pos)
         self.feed_input(self.crop_size, crop_size)
 
@@ -360,7 +360,7 @@ class SliceSynthDataPipelinePythonOp(Pipeline):
         data = self.iterator.next()
         self.feed_input(self.data, data, layout=self.layout)
 
-        (crop_pos, crop_size) = self.pos_size_iter.next()
+        crop_pos, crop_size = self.pos_size_iter.next()
         self.feed_input(self.crop_pos, crop_pos)
         self.feed_input(self.crop_size, crop_size)
 
@@ -405,7 +405,7 @@ class SlicePythonOp(Pipeline):
         return out
 
     def iter_setup(self):
-        (crop_pos, crop_size) = self.pos_size_iter.next()
+        crop_pos, crop_size = self.pos_size_iter.next()
         self.feed_input(self.crop_pos, crop_pos)
         self.feed_input(self.crop_size, crop_size)
 
@@ -1156,6 +1156,27 @@ def test_empty_input(device, use_empty_input):
     if device == "gpu":
         o = o.as_cpu()
     assert np.array_equal(o[0], [])
+
+
+@params(
+    ("cpu",),
+    ("gpu",),
+)
+def test_arg_broadcasting(device):
+    @pipeline_def(batch_size=1, num_threads=1, device_id=0 if device == "gpu" else None)
+    def make_pipe():
+        inp = np.zeros([480, 640, 3], dtype="int")
+        x = types.Constant(inp, device=device)
+        anchor = types.Constant(10, device="cpu")
+        shape = types.Constant(100, device="cpu")
+        axes = types.Constant(1, device="cpu")
+        return fn.slice(x, anchor, shape, axes=axes)
+
+    p = make_pipe()
+    (o,) = p.run()
+    if device == "gpu":
+        o = o.as_cpu()
+    assert tuple(o[0].shape()) == (480, 100, 3)
 
 
 def test_wrong_arg_backend():

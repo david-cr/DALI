@@ -22,8 +22,14 @@ import glob
 import os
 import random
 from itertools import cycle
-from test_utils import get_dali_extra_path, is_mulit_gpu, skip_if_m60
-from nose2.tools import params
+from test_utils import (
+    get_dali_extra_path,
+    is_mulit_gpu,
+    skip_if_m60,
+    compare_pipelines,
+    check_output_pattern,
+)
+from nose2.tools import cartesian_params, params
 from nose_utils import SkipTest, attr, assert_raises
 
 filenames = glob.glob(f"{get_dali_extra_path()}/db/video/[cv]fr/*.mp4")
@@ -37,12 +43,12 @@ files = [np.fromfile(filename, dtype=np.uint8) for filename in filenames]
 
 
 cfr_files = [
-    f"{get_dali_extra_path()}/db/video/cfr/test_1.mp4",
-    f"{get_dali_extra_path()}/db/video/cfr/test_2.mp4",
+    f"{get_dali_extra_path()}/db/video/cfr/test_1_vp9.mp4",
+    f"{get_dali_extra_path()}/db/video/cfr/test_2_vp9.mp4",
 ]
 vfr_files = [
-    f"{get_dali_extra_path()}/db/video/vfr/test_1.mp4",
-    f"{get_dali_extra_path()}/db/video/vfr/test_2.mp4",
+    f"{get_dali_extra_path()}/db/video/vfr/test_1_vp9.mp4",
+    f"{get_dali_extra_path()}/db/video/vfr/test_2_vp9.mp4",
 ]
 
 codec_files = {
@@ -53,6 +59,17 @@ codec_files = {
     "vp8": [f"{get_dali_extra_path()}/db/video/vp8/vp8.webm"],
     "vp9": [f"{get_dali_extra_path()}/db/video/vp9/vp9_0.mp4"],
 }
+
+
+# list all not supported codecs by the CPU operator we test on
+unsupported_cpu_codec_error = r"is not supported by the CPU variant of this operator\."
+unsupported_cpu_codecs = {"h264", "hevc", "mpeg4", "av1"}
+
+
+def assert_unsupported_cpu_codec(run_pipeline):
+    with check_output_pattern(unsupported_cpu_codec_error):
+        with assert_raises(RuntimeError):
+            run_pipeline()
 
 
 def idx_reflect_101(idx, lo, hi):
@@ -254,7 +271,7 @@ def test_full_range_video():
     assert np.mean(absdiff) < 2
 
 
-@params("cpu", "gpu")
+@params("gpu")
 def test_full_range_video_in_memory(device):
     skip_if_m60()
 
@@ -294,10 +311,15 @@ def test_multi_gpu_video(device):
     def input_gen(batch_size):
         filenames = glob.glob(f"{get_dali_extra_path()}/db/video/[cv]fr/*.mp4")
         # test overflow of frame_buffer_
-        filenames.append(f"{get_dali_extra_path()}/db/video/cfr_test.mp4")
-        filenames = filter(lambda filename: "mpeg4" not in filename, filenames)
+        if device == "mixed":
+            filenames.append(f"{get_dali_extra_path()}/db/video/cfr_test.mp4")
         filenames = filter(lambda filename: "hevc" not in filename, filenames)
         filenames = filter(lambda filename: "av1" not in filename, filenames)
+        if device == "cpu":
+            # some formats are not yet supported in the CPU operator itself
+            filenames = filter(lambda filename: "mpeg4" not in filename, filenames)
+            excluded = {"test_1.mp4", "test_2.mp4"}
+            filenames = filter(lambda f: os.path.basename(f) not in excluded, filenames)
         filenames = cycle(filenames)
         while True:
             batch = []
@@ -326,9 +348,13 @@ def test_source_info(device):
     filenames = glob.glob(f"{get_dali_extra_path()}/db/video/[cv]fr/*.mp4")
     # filter out HEVC because some GPUs do not support it
     filenames = filter(lambda filename: "hevc" not in filename, filenames)
-    # mpeg4 is not yet supported in the CPU operator itself
-    filenames = filter(lambda filename: "mpeg4" not in filename, filenames)
+    # filter out AV1 because some GPUs do not support it
     filenames = filter(lambda filename: "av1" not in filename, filenames)
+    if device == "cpu":
+        # some formats are not yet supported in the CPU operator itself
+        filenames = filter(lambda filename: "mpeg4" not in filename, filenames)
+        excluded = {"test_1.mp4", "test_2.mp4"}
+        filenames = filter(lambda f: os.path.basename(f) not in excluded, filenames)
 
     files = list(filenames)
 
@@ -343,7 +369,8 @@ def test_source_info(device):
         return videos
 
     batch_size = 4
-    p = test_pipeline(batch_size=batch_size, num_threads=1, device_id=0)
+    device_id = None if device == "cpu" else 0
+    p = test_pipeline(batch_size=batch_size, num_threads=1, device_id=device_id)
 
     samples_read = 0
     while samples_read < len(files):
@@ -687,8 +714,8 @@ def test_multichannel_fill_value(device):
         return decoded0, decoded1
 
     batch_size = 3
-    pipe = test_pipeline(batch_size=batch_size, num_threads=3, device_id=0)
-    pipe.build()
+    device_id = None if device == "cpu" else 0
+    pipe = test_pipeline(batch_size=batch_size, num_threads=3, device_id=device_id)
     out = pipe.run()
     out0, out1 = (o.as_cpu() for o in out)
 
@@ -803,8 +830,6 @@ def test_decoder_operator_codec_support(
     filenames = codec_files[codec]
     assert len(filenames) > 0, f"No {codec} test files found"
 
-    if device == "cpu" and codec == "mpeg4":
-        raise SkipTest(f"Codec {codec} is not supported by the CPU decoder.")
     if codec == "av1":
         raise SkipTest(f"Codec {codec} is only supported by Ampere+ GPUs, skipping test for now.")
 
@@ -812,9 +837,6 @@ def test_decoder_operator_codec_support(
     diff_step = 5 if codec == "mpeg4" else 2
 
     batch = []
-    for i in range(batch_size):
-        with open(filenames[i % len(filenames)], "rb") as f:
-            batch.append(np.frombuffer(f.read(), dtype=np.uint8))
 
     def get_batch():
         random.shuffle(batch)
@@ -833,8 +855,20 @@ def test_decoder_operator_codec_support(
         )
         return videos
 
-    pipe = decoder_pipeline(batch_size=batch_size, num_threads=2, device_id=0)
-    pipe.build()
+    device_id = None if device == "cpu" else 0
+    pipe = decoder_pipeline(batch_size=batch_size, num_threads=2, device_id=device_id)
+    if device == "cpu" and codec in unsupported_cpu_codecs:
+        # Only the codec-detection path is exercised; load a single file so the decoder
+        # has bytes to inspect, then return without consuming the full test batch.
+        with open(filenames[0], "rb") as f:
+            batch.append(np.frombuffer(f.read(), dtype=np.uint8))
+        assert_unsupported_cpu_codec(pipe.run)
+        return
+
+    for i in range(batch_size):
+        with open(filenames[i % len(filenames)], "rb") as f:
+            batch.append(np.frombuffer(f.read(), dtype=np.uint8))
+
     (out,) = pipe.run()
     assert len(out) > 0, f"No output from decoder pipeline for {codec}"
 
@@ -864,8 +898,6 @@ def test_reader_operator_codec_support(device, codec, sequence_length=3, stride=
     filenames = codec_files[codec]
     assert len(filenames) > 0, f"No {codec} test files found"
 
-    if device == "cpu" and codec == "mpeg4":
-        raise SkipTest(f"Codec {codec} is not supported by the CPU decoder.")
     if codec == "av1":
         raise SkipTest(f"Codec {codec} is only supported by Ampere+ GPUs, skipping test for now.")
 
@@ -879,12 +911,17 @@ def test_reader_operator_codec_support(device, codec, sequence_length=3, stride=
             device=device,
             sequence_length=sequence_length,
             stride=stride,
-            enable_frame_num=True,
+            enable_frame_num="scalar",
         )
         return videos, frame_no
 
-    pipe = decoder_pipeline(batch_size=batch_size, num_threads=2, device_id=0)
-    (out, frame_no) = pipe.run()
+    device_id = None if device == "cpu" else 0
+    pipe = decoder_pipeline(batch_size=batch_size, num_threads=2, device_id=device_id)
+    if device == "cpu" and codec in unsupported_cpu_codecs:
+        assert_unsupported_cpu_codec(pipe.run)
+        return
+
+    out, frame_no = pipe.run()
     assert len(out) > 0, f"No output from decoder pipeline for {codec}"
 
     for i in range(batch_size):
@@ -931,8 +968,311 @@ def test_no_first_key_frame():
         seed=123456,
     )
 
-    pipe.build()
     pipe.run()
+
+
+@cartesian_params(["cpu", "gpu"], [1, 2, 3])
+def test_enable_frame_num_sequence_basic(device, stride):
+    """Test that enable_frame_num='sequence' returns correct per-frame frame indices."""
+    skip_if_m60()
+    sequence_length = 5
+    batch_size = 2
+    filenames = cfr_files
+
+    @pipeline_def
+    def video_pipe():
+        videos, frame_idxs = fn.experimental.readers.video(
+            filenames=filenames,
+            device=device,
+            sequence_length=sequence_length,
+            stride=stride,
+            enable_frame_num="sequence",
+        )
+        return videos, frame_idxs
+
+    pipe = video_pipe(batch_size=batch_size, num_threads=2, device_id=0)
+    out_videos, out_frame_idxs = pipe.run()
+
+    for i in range(batch_size):
+        idxs = out_frame_idxs.as_cpu().at(i)
+
+        # Output should have shape (sequence_length,)
+        assert idxs.shape == (
+            sequence_length,
+        ), f"Expected shape ({sequence_length},), got {idxs.shape}"
+
+        # All frames should be valid (>= 0) since we use default pad_mode='none'
+        # and the video has enough frames
+        assert all(
+            idx >= 0 for idx in idxs.flatten()
+        ), f"Expected all frame indices >= 0, got {idxs}"
+
+        # Frame indices should be monotonically increasing with step=stride
+        idxs_flat = idxs.flatten()
+        for j in range(1, len(idxs_flat)):
+            assert idxs_flat[j] == idxs_flat[j - 1] + stride, (
+                f"Expected consecutive frame indices to differ by stride={stride}, "
+                f"got {idxs_flat[j-1]} and {idxs_flat[j]}"
+            )
+
+
+@params(*[(device,) for device in ["cpu", "gpu"]])
+def test_enable_frame_num_sequence_with_padding(device):
+    """Test that enable_frame_num='sequence' returns -1 for constant-padded frames."""
+    skip_if_m60()
+    sequence_length = 8
+    stride = 3
+    batch_size = 1
+    video_file = cfr_files[0]
+
+    # Count total frames in the video
+    container = av.open(video_file)
+    video_stream = next(s for s in container.streams if s.type == "video")
+    total_frames = video_stream.frames
+    container.close()
+
+    @pipeline_def
+    def video_pipe():
+        videos, frame_idxs = fn.experimental.readers.video(
+            filenames=[video_file],
+            device=device,
+            sequence_length=sequence_length,
+            stride=stride,
+            pad_mode="constant",
+            enable_frame_num="sequence",
+        )
+        return videos, frame_idxs
+
+    pipe = video_pipe(batch_size=batch_size, num_threads=2, device_id=0)
+
+    # Iterate until the tail (padded) sequence is reached
+    full_sequences = total_frames // (stride * sequence_length)
+    padded_idxs = None
+    for _ in range(full_sequences + 2):
+        _, out_idxs = pipe.run()
+        idxs = out_idxs.as_cpu().at(0).flatten()
+        if -1 in idxs:
+            padded_idxs = idxs
+            break
+
+    assert (
+        padded_idxs is not None
+    ), "No padded sample encountered - expected a tail sequence with -1 indices"
+    first_pad_pos = np.where(padded_idxs == -1)[0][0]
+    assert all(
+        padded_idxs[:first_pad_pos] >= 0
+    ), f"Expected non-negative frame indices before padding, got {padded_idxs}"
+    assert all(
+        padded_idxs[first_pad_pos:] == -1
+    ), f"Expected -1 for all padded frames, got {padded_idxs}"
+
+
+def _ref_clamp(idx, size):
+    return max(0, min(idx, size - 1))
+
+
+def _ref_reflect_1001(idx, size):
+    """idx_reflect_1001(idx, 0, size): symmetric reflection including endpoints."""
+    if size <= 0:
+        return 0
+    period = 2 * size
+    idx = idx % period
+    if idx < 0:
+        idx += period
+    return idx if idx < size else 2 * size - 1 - idx
+
+
+def _ref_reflect_101(idx, size):
+    """idx_reflect_101(idx, 0, size): reflection without repeating endpoints."""
+    if size <= 1:
+        return 0
+    period = 2 * (size - 1)
+    idx = idx % period
+    if idx < 0:
+        idx += period
+    return idx if idx < size else 2 * (size - 1) - idx
+
+
+_BOUNDARY_REF = {
+    "edge": _ref_clamp,
+    "reflect_1001": _ref_reflect_1001,
+    "reflect_101": _ref_reflect_101,
+}
+
+
+@cartesian_params(["cpu", "gpu"], ["edge", "reflect_1001", "reflect_101"])
+def test_enable_frame_num_sequence_non_constant_padding(device, pad_mode):
+    """Test enable_frame_num='sequence' with non-constant pad modes (edge, reflect).
+
+    The experimental reader uses HandleBoundary() which returns reflected/clamped
+    indices for these modes instead of -1 (which is only returned for pad_mode='constant').
+    """
+    skip_if_m60()
+    sequence_length = 8
+    stride = 2
+    batch_size = 1
+    video_file = cfr_files[0]
+
+    container = av.open(video_file)
+    video_stream = next(s for s in container.streams if s.type == "video")
+    total_frames = video_stream.frames
+    container.close()
+
+    full_seq_stride = stride * sequence_length
+    if total_frames % full_seq_stride == 0:
+        raise SkipTest(
+            f"Video has {total_frames} frames, exactly divisible by {full_seq_stride}; "
+            f"no padding needed"
+        )
+
+    tail_start = (total_frames // full_seq_stride) * full_seq_stride
+    ref_fn = _BOUNDARY_REF[pad_mode]
+    expected = [ref_fn(tail_start + i * stride, total_frames) for i in range(sequence_length)]
+
+    @pipeline_def
+    def video_pipe():
+        videos, frame_idxs = fn.experimental.readers.video(
+            filenames=[video_file],
+            device=device,
+            sequence_length=sequence_length,
+            stride=stride,
+            pad_mode=pad_mode,
+            enable_frame_num="sequence",
+        )
+        return videos, frame_idxs
+
+    pipe = video_pipe(batch_size=batch_size, num_threads=2, device_id=0)
+
+    num_full_seqs = total_frames // full_seq_stride
+    padded_idxs = None
+    for _ in range(num_full_seqs + 2):
+        _, out_idxs = pipe.run()
+        idxs = out_idxs.as_cpu().at(0).flatten()
+        if idxs[0] == tail_start:
+            padded_idxs = idxs
+            break
+
+    assert padded_idxs is not None, (
+        f"No tail sequence starting at frame {tail_start} was found in "
+        f"{num_full_seqs + 2} iterations"
+    )
+    assert all(
+        idx >= 0 for idx in padded_idxs
+    ), f"pad_mode='{pad_mode}' should not produce -1 frame indices, got {padded_idxs}"
+    for j, (got, exp) in enumerate(zip(padded_idxs.tolist(), expected)):
+        assert got == exp, (
+            f"Frame {j} (source idx {tail_start + j * stride}): "
+            f"got {got}, expected {exp} for pad_mode='{pad_mode}'"
+        )
+
+
+@params(*[(device,) for device in ["cpu", "gpu"]])
+def test_enable_frame_num_sequence_matches_scalar(device):
+    """Test that the first element of 'sequence' output matches 'scalar' output."""
+    skip_if_m60()
+    sequence_length = 5
+    stride = 2
+    batch_size = 2
+    filenames = cfr_files
+
+    @pipeline_def
+    def scalar_pipe():
+        videos, frame_idx = fn.experimental.readers.video(
+            filenames=filenames,
+            device=device,
+            sequence_length=sequence_length,
+            stride=stride,
+            enable_frame_num="scalar",
+        )
+        return videos, frame_idx
+
+    @pipeline_def
+    def sequence_pipe():
+        videos, frame_idxs = fn.experimental.readers.video(
+            filenames=filenames,
+            device=device,
+            sequence_length=sequence_length,
+            stride=stride,
+            enable_frame_num="sequence",
+        )
+        return videos, frame_idxs
+
+    pipe_s = scalar_pipe(batch_size=batch_size, num_threads=2, device_id=0, seed=42)
+    pipe_q = sequence_pipe(batch_size=batch_size, num_threads=2, device_id=0, seed=42)
+    _, out_scalar = pipe_s.run()
+    _, out_sequence = pipe_q.run()
+
+    for i in range(batch_size):
+        scalar_idx = int(out_scalar.as_cpu().at(i)[0])
+        seq_idxs = out_sequence.as_cpu().at(i).flatten()
+        assert seq_idxs[0] == scalar_idx, (
+            f"First element of 'sequence' output ({seq_idxs[0]}) should match "
+            f"'scalar' output ({scalar_idx})"
+        )
+
+
+@params("cpu", "gpu")
+def test_enable_frame_num_true_compat(device):
+    """Test backward compat: enable_frame_num=True behaves like 'scalar'."""
+    skip_if_m60()
+    sequence_length = 5
+    stride = 1
+    batch_size = 2
+    filenames = cfr_files
+
+    @pipeline_def
+    def bool_pipe():
+        _, frame_idx = fn.experimental.readers.video(
+            filenames=filenames,
+            device=device,
+            sequence_length=sequence_length,
+            stride=stride,
+            enable_frame_num=True,
+        )
+        return frame_idx
+
+    @pipeline_def
+    def scalar_pipe():
+        _, frame_idx = fn.experimental.readers.video(
+            filenames=filenames,
+            device=device,
+            sequence_length=sequence_length,
+            stride=stride,
+            enable_frame_num="scalar",
+        )
+        return frame_idx
+
+    pipe_bool = bool_pipe(batch_size=batch_size, num_threads=2, device_id=0, seed=42)
+    pipe_str = scalar_pipe(batch_size=batch_size, num_threads=2, device_id=0, seed=42)
+    compare_pipelines(pipe_bool, pipe_str, batch_size=batch_size, N_iterations=2)
+
+
+@cartesian_params(["cpu", "gpu"], [False, None])
+def test_enable_frame_num_false_none_compat(device, value):
+    """Test backward compat: enable_frame_num=False/None behaves like 'none' (no output)."""
+    skip_if_m60()
+    sequence_length = 5
+    stride = 1
+    batch_size = 2
+    filenames = cfr_files
+
+    @pipeline_def
+    def no_frame_num_pipe():
+        videos = fn.experimental.readers.video(
+            filenames=filenames,
+            device=device,
+            sequence_length=sequence_length,
+            stride=stride,
+            enable_frame_num=value,
+        )
+        return videos
+
+    pipe = no_frame_num_pipe(batch_size=batch_size, num_threads=2, device_id=0, seed=42)
+    (videos,) = pipe.run()
+    assert videos.as_cpu().at(0).shape[0] == sequence_length, (
+        f"enable_frame_num={value!r}: expected {sequence_length} frames, "
+        f"got {videos.as_cpu().at(0).shape[0]}"
+    )
 
 
 def test_video_index_reuse():
@@ -962,8 +1302,6 @@ def test_video_index_reuse():
         filenames=video_files,
         seed=123456,
     )
-
-    pipe.build()
 
     # recreate the pipeline to reuse indices build already
     pipe = video_pipe(

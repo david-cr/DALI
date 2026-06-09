@@ -33,7 +33,7 @@ PLENTY_VIDEO_FILES = os.listdir(PLENTY_VIDEO_DIRECTORY)
 VIDEO_FILES = [VIDEO_DIRECTORY + "/" + f for f in VIDEO_FILES]
 PLENTY_VIDEO_FILES = [PLENTY_VIDEO_DIRECTORY + "/" + f for f in PLENTY_VIDEO_FILES]
 FILE_LIST = "/tmp/file_list.txt"
-MUTLIPLE_RESOLUTION_ROOT = "/tmp/video_resolution/"
+MUTLIPLE_RESOLUTION_ROOT = "/tmp/video_resolution/vp9/"
 
 test_data_root = get_dali_extra_path()
 video_data_root = os.path.join(test_data_root, "db", "video")
@@ -369,7 +369,7 @@ def test_plenty_of_video_files():
 
 
 def check_corrupted_videos(reader_op, reader_args, corrupted_video, msg):
-    good_video_path = os.path.join(video_data_root, "cfr", "test_2.mp4")
+    good_video_path = os.path.join(video_data_root, "cfr", "test_2_vp9.mp4")
     corrupted_video_path = os.path.join(corrupted_video_data_root, corrupted_video)
     reader_args["filenames"] = [corrupted_video_path, good_video_path]
     reader_args["sequence_length"] = 3
@@ -583,7 +583,7 @@ def test_10bit_vid_reconfigure():
 
     pipe = video_decoder_pipeline(batch_size=batch_size, num_threads=1, device_id=0)
     for _ in range(iter):
-        (a, b) = pipe.run()
+        a, b = pipe.run()
         a = a.as_cpu().as_array()
         b = b.as_cpu().as_array()
         absdiff = np.abs(a.astype(int) - b.astype(int))

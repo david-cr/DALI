@@ -43,7 +43,7 @@ This operator can be used in the following modes:
 2. Read file names from a text file indicated in `file_list` argument.
 3. Read files listed in `files` argument.
 4. Number of outputs per sample corresponds to the length of `hdu_indices` argument. By default,
-first HDU with data is read from each file, so the number of outputs defaults to 1. 
+first HDU with data is read from each file, so the number of outputs defaults to 1.
 )")
     .NumInput(0)
     .OutputFn(detail::FitsReaderOutputFn)
@@ -71,6 +71,22 @@ This argument is mutually exclusive with `files`.)",
 
 `stick_to_shard` and `random_shuffle` cannot be used when this argument is set to True.)",
                     false)
+    .AddOptionalArg<int32_t>("shuffle_after_epoch_seed",
+                    R"(Random seed for the dataset shuffling performed after each epoch.
+
+If not provided, a fixed default seed is used, which results in the same shuffling
+pattern across different training runs. Providing a custom seed allows for different
+shuffle patterns across training runs, which may be desirable for better statistical
+properties.
+
+.. note::
+    When using multiple DALI pipelines (e.g., for multi-GPU training), all pipeline
+    instances should use the same `shuffle_after_epoch_seed` to ensure a consistent
+    global shuffle across all shards.
+
+.. note::
+    This argument has no effect unless `shuffle_after_epoch` is set to ``True``.)",
+                    nullptr, false)
     .AddOptionalArg<vector<string>>("files", R"(A list of file paths to read the data from.
 
 If `file_root` is provided, the paths are treated as being relative to it.
@@ -78,7 +94,7 @@ If `file_root` is provided, the paths are treated as being relative to it.
 This argument is mutually exclusive with `file_list`.)",
                                     nullptr)
     .AddOptionalArg("hdu_indices",
-                    R"(HDU indices to read. If not provided, the first HDU after the primary 
+                    R"(HDU indices to read. If not provided, the first HDU after the primary
 will be yielded. Since HDUs are indexed starting from 1, the default value is as follows: hdu_indices = [2].
 Size of the provided list hdu_indices defines number of outputs per sample.)",
                     std::vector<int>{2})
@@ -98,7 +114,7 @@ void FitsReaderCPU::RunImpl(Workspace &ws) {
     auto &output = ws.Output<CPUBackend>(output_idx);
     for (int file_idx = 0; file_idx < num_samples; file_idx++) {
       auto &sample = GetSample(file_idx);
-      ThreadPool::Work copy_task = [output_idx = output_idx, data_idx = file_idx, &output,
+      auto copy_task = [output_idx = output_idx, data_idx = file_idx, &output,
                                     &sample](int) {
         std::memcpy(output.raw_mutable_tensor(data_idx), sample.data[output_idx].raw_data(),
                     sample.data[output_idx].nbytes());

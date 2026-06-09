@@ -18,14 +18,14 @@ import makefun
 import nvidia.dali.backend as _b
 import nvidia.dali.ops as _legacy_ops
 import nvidia.dali.types
-import nvtx
+from ._nvtx import NVTXRange
 from nvidia.dali import internal as _internal
 from nvidia.dali.fn import _to_snake_case
 from nvidia.dali.ops import _docs, _names
 
 from . import _device, _invocation, _op_filter, _ops, _type
 from ._batch import Batch
-from ._tensor import Tensor
+from ._tensor import Tensor, tensor as to_tensor
 
 
 def is_external(x):
@@ -92,6 +92,20 @@ def _get_module_name(module, legacy_op_class):
     return module_name
 
 
+def _get_caller_depth(has_fn_wrapper: bool):
+    # By default, the call stack is as follows:
+    # - __call__ function
+    # - nvtx decorator
+    # - makefun-generated function
+    # - fn wrapper
+    # - nvtx decorator
+    # - makefun-generation function
+    # As a result we have to skip 6 frames.
+    # There are however exceptions such as reader called explicitly or manually created operators
+    # that don't rely on the fn wrapper. For such cases, we skip only 3 frames.
+    return 6 if has_fn_wrapper else 3
+
+
 def build_operator_class(schema):
     """
     Generates an Operator subclass based on a schema, fills the members and implements the __init__
@@ -132,7 +146,11 @@ def build_operator_class(schema):
                 f"empty set of supported backends. Is it a Python-only operator?"
             )
     op_class._op_name = class_name
-    op_class._fn_name = _to_snake_case(class_name)
+    op_class._op_path = ".".join(module_path + [op_class._op_name])
+    op_class._is_reader = is_reader
+    if not is_reader:
+        op_class._fn_name = _to_snake_case(class_name)
+        op_class._fn_path = ".".join(module_path + [op_class._fn_name])
     op_class._legacy_op = legacy_op_class
     op_class._is_stateful = schema.IsStateful()
     op_class._has_random_state_arg = schema.HasRandomStateArg()
@@ -157,20 +175,25 @@ def build_constructor(schema, op_class):
     Operator._get() can be used instead of the constructor to utilize the instance caching.
     """
     stateful = op_class._is_stateful
+    is_reader = op_class._is_reader
     function_name = "__init__"
 
     init_args = []
     used_kwargs = set()
+    tensor_arg_names = set()
     for arg in schema.GetArgumentNames():
         if arg in _unsupported_args:
             continue
-        if schema.IsTensorArgument(arg):
+        is_tensor = schema.IsTensorArgument(arg)
+        if is_tensor and not is_reader:
             continue
         if schema.IsArgumentOptional(arg):
             init_args.append(f"{arg}=None")
         else:
             init_args.append(arg)
         used_kwargs.add(arg)
+        if is_tensor:
+            tensor_arg_names.add(arg)
 
     if init_args:
         init_args = ["*"] + init_args
@@ -189,8 +212,25 @@ def build_constructor(schema, op_class):
 
     # Note: Base __init__ will keep the **kwargs
     def init(self, max_batch_size, name, **kwargs):
+        if is_reader:
+            actual_tensor_arg_names = {
+                arg_name for arg_name in tensor_arg_names if kwargs.get(arg_name) is not None
+            }
+            tensor_args = {}
+            for arg_name in tensor_arg_names:
+                arg = kwargs.get(arg_name)
+                if arg is None or isinstance(arg, (int, float, bool, str, tuple, list)):
+                    continue
+                del kwargs[arg_name]
+                if isinstance(arg, Batch):
+                    raise ValueError("Readers cannot be constructed with batch keyword arguments")
+                dtype = op_class._argument_conversion_map[arg_name]
+                tensor_args[arg_name] = to_tensor(arg, dtype=dtype)
         kwargs = {k: _scalar_decay(v) for k, v in kwargs.items()}
         op_class.__base__.__init__(self, max_batch_size, name, **kwargs)
+        if is_reader:  # Need to be done here not to be overridden by the constructor
+            self._tensor_arg_names = actual_tensor_arg_names
+            self._raw_tensor_args = tensor_args
         if stateful:
             self._call_id = 0
 
@@ -265,59 +305,71 @@ def build_call_function(schema, op_class):
 
     header = f"__call__({', '.join(['self'] + inputs + call_args + internal_args)})"
 
+    @NVTXRange(f"__call__: {op_class._op_name}", category="op_builder")
     def call(self, *raw_args, batch_size=None, _process_params=True, **raw_kwargs):
-        with nvtx.annotate(f"__call__: {self._op_name}", domain="op_builder"):
-            self._pre_call(*raw_args, **raw_kwargs)
-            batch_size = _ops._infer_batch_size(batch_size, *raw_args, **raw_kwargs)
-            is_batch = batch_size is not None
+        self._pre_call(*raw_args, **raw_kwargs)
 
-            if _process_params:
-                inputs, kwargs = op_class._process_params(
-                    self._backend, self._device, batch_size, *raw_args, **raw_kwargs
+        if op_class._is_reader and self._tensor_arg_names:
+            actual_kwargs = {name for name, value in raw_kwargs.items() if value is not None}
+            overlap = actual_kwargs & self._tensor_arg_names
+            if overlap:
+                raise ValueError(
+                    f"Keyword argument{'s'[:len(overlap)^1]} {sorted(overlap)}"
+                    f" cannot be passed both in the constructor and __call__."
                 )
-            else:
-                inputs = [inp for inp in raw_args if inp is not None]
-                kwargs = {name: value for name, value in raw_kwargs.items() if value is not None}
+            raw_kwargs = {**raw_kwargs, **self._raw_tensor_args}
 
-            with nvtx.annotate("__call__: shallowcopy", domain="op_builder"):
-                inputs = [copy.copy(x) for x in inputs]
-                kwargs = {k: copy.copy(v) for k, v in kwargs.items()}
+        batch_size = _ops._infer_batch_size(batch_size, *raw_args, **raw_kwargs)
+        is_batch = batch_size is not None
 
-            if stateful:
-                call_id = self._call_id
-                self._call_id += 1
-            else:
-                call_id = None
-            with nvtx.annotate("__call__: construct Invocation", domain="op_builder"):
-                invocation = _invocation.Invocation(
-                    self,
-                    call_id,
-                    inputs,
-                    kwargs,
-                    is_batch=is_batch,
-                    batch_size=batch_size or 1,
-                    previous_invocation=self._last_invocation,
-                )
-
-            if stateful:
-                self._last_invocation = invocation
-
-            has_external_inputs = any(is_external(x) for x in inputs) or any(
-                is_external(x) for x in kwargs.values()
+        if _process_params:
+            inputs, kwargs = op_class._process_params(
+                self._backend, self._device, batch_size, *raw_args, **raw_kwargs
             )
-            invocation.apply_eval_policy(has_external_inputs)
+        else:
+            inputs = [inp for inp in raw_args if inp is not None]
+            kwargs = {name: value for name, value in raw_kwargs.items() if value is not None}
 
-            ResultType = Batch if is_batch else Tensor
+        with NVTXRange("__call__: shallowcopy", category="op_builder"):
+            inputs = [copy.copy(x) for x in inputs]
+            kwargs = {k: copy.copy(v) for k, v in kwargs.items()}
 
-            if len(invocation) == 1:
-                return ResultType(invocation_result=invocation[0])
-            elif self._output_names is None:
-                return tuple(ResultType(invocation_result=res) for res in invocation)
-            else:
-                return {
-                    name: ResultType(invocation_result=res)
-                    for name, res in zip(self._output_names, invocation)
-                }
+        if stateful:
+            call_id = self._call_id
+            self._call_id += 1
+        else:
+            call_id = None
+        with NVTXRange("__call__: construct Invocation", category="op_builder"):
+            invocation = _invocation.Invocation(
+                self,
+                call_id,
+                inputs=inputs,
+                args=kwargs,
+                is_batch=is_batch,
+                batch_size=batch_size or 1,
+                previous_invocation=self._last_invocation,
+                caller_depth=_get_caller_depth(not _process_params),
+            )
+
+        if stateful:
+            self._last_invocation = invocation
+
+        has_external_inputs = any(is_external(x) for x in inputs) or any(
+            is_external(x) for x in kwargs.values()
+        )
+        invocation.apply_eval_policy(has_external_inputs)
+
+        ResultType = Batch if is_batch else Tensor
+
+        if len(invocation) == 1:
+            return ResultType(invocation_result=invocation[0])
+        elif self._output_names is None:
+            return tuple(ResultType(invocation_result=res) for res in invocation)
+        else:
+            return {
+                name: ResultType(invocation_result=res)
+                for name, res in zip(self._output_names, invocation)
+            }
 
     doc = _docs._docstring_generator_call(schema.Name(), api="dynamic", args=used_kwargs)
     function = makefun.create_function(header, call, doc=doc)
@@ -381,6 +433,7 @@ def build_fn_wrapper(op, fn_name=None, add_to_module=True):
 
     header = f"{fn_name}({', '.join(inputs + signature_args)})"
 
+    @NVTXRange(f"{fn_name}()", category="op_builder")
     def fn_call(*inputs, batch_size=None, device=None, **raw_kwargs):
         batch_size = _ops._infer_batch_size(batch_size, *inputs, **raw_kwargs)
         max_batch_size = _next_pow2(batch_size or 1)
@@ -439,7 +492,7 @@ def build_fn_wrapper(op, fn_name=None, add_to_module=True):
         inputs, call_args = op._process_params(backend, device, batch_size, *inputs, **call_args)
 
         # Get or create the operator instance that matches the arguments
-        with nvtx.annotate(f"get instance {op._op_name}", domain="op_builder"):
+        with NVTXRange(f"get instance {op._op_name}", category="op_builder"):
             op_inst = op._get(
                 max_batch_size=max_batch_size,
                 name=None,

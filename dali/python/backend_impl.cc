@@ -45,6 +45,7 @@
 #include "dali/python/python3_compat.h"
 #include "dali/util/pybind.h"
 #include "dali/util/user_stream.h"
+#include "dali/pipeline/util/new_thread_pool.h"
 
 namespace dali {
 namespace python {
@@ -158,6 +159,7 @@ py::dict ArrayInterfaceRepr(Tensor<Backend> &t) {
 }
 
 namespace {
+  const uint32_t kDynamicDefaultColor = 0x957DAD;
   const uint32_t kCPUTensorColor = DomainTimeRange::kBlue1;
   const uint32_t kGPUTensorColor = DomainTimeRange::knvGreen;
 }  // namespace
@@ -179,19 +181,17 @@ void CheckContiguousTensor(const TStrides &strides, int num_strides,
                            const TShape &shape, int num_extents, size_t element_size) {
   DALI_ENFORCE(num_strides == num_extents,
     "There should be exactly as many strides as there are extents in array shape.");
+  for (int i = 0; i < num_extents; i++)
+    if (shape[i] == 0)
+      return;  // The volume is 0, the strides will never be used to compute an actual address
+
   int64_t stride_from_shape = element_size;
-  int64_t stride_from_shape_collapsed = 1;
-  int64_t last_non_one_dim = 1;
   for (int i = num_strides - 1; i >= 0; i--) {
-    DALI_ENFORCE(strides[i] == stride_from_shape || strides[i] == stride_from_shape_collapsed,
+    DALI_ENFORCE(shape[i] == 1 ||  // ignore unit extents - the stride won't be used anyway
+                 strides[i] == stride_from_shape,
         make_string("Strided data not supported. Dimension ", i, " has stride ", strides[i],
         " whereas densely packed data of this shape would have a stride ", stride_from_shape));
     stride_from_shape *= shape[i];
-    // for shapes [1, 1, 5] leading dimensions may not contribute to stride
-    if (shape[i] != 1) {
-      stride_from_shape_collapsed *= last_non_one_dim;
-      last_non_one_dim = shape[i];
-    }
   }
 }
 
@@ -1137,7 +1137,9 @@ std::shared_ptr<TensorList<Backend>> TensorListFromListOfTensors(
       py::list &list_of_tensors,
       const std::optional<std::string> &layout = {},
       bool contiguous = true) {
-  DomainTimeRange range("TensorListFromListOfTensors");
+  constexpr uint32_t rangeColor =
+      std::is_same_v<Backend, CPUBackend> ? kCPUTensorColor : kGPUTensorColor;
+  DomainTimeRange range("TensorListFromListOfTensors", rangeColor);
   if (list_of_tensors.empty()) {
     auto ptr = std::make_shared<TensorList<Backend>>();
     if (layout.has_value()) {
@@ -1165,7 +1167,7 @@ std::shared_ptr<TensorList<Backend>> TensorListFromListOfTensors(
   AccessOrder copy_order = AccessOrder::host();
 
   {
-    DomainTimeRange range("Build initial list");
+    DomainTimeRange range("Build initial list", rangeColor);
 
     for (size_t i = 0; i < list_of_tensors.size(); ++i) {
       try {
@@ -1202,7 +1204,7 @@ std::shared_ptr<TensorList<Backend>> TensorListFromListOfTensors(
   }
 
   {
-    DomainTimeRange range("Copy to contiguous");
+    DomainTimeRange range("Copy to contiguous", rangeColor);
     auto contiguous_out = std::make_shared<TensorList<Backend>>();
     contiguous_out->SetContiguity(BatchContiguity::Contiguous);
     contiguous_out->set_pinned(non_contiguous.is_pinned());
@@ -2396,6 +2398,16 @@ class PyWorkspace : public Workspace {
   py::object py_stream_;
 };
 
+struct ThreadPoolOwner {  // a base class for proper destruction order in PyThreadPoolFacade
+  std::shared_ptr<ThreadPoolBase> shared_tp_;
+};
+
+class PyThreadPoolFacade : private ThreadPoolOwner, public ThreadPoolFacade {
+ public:
+  explicit PyThreadPoolFacade(std::shared_ptr<ThreadPoolBase> tp)
+  : ThreadPoolOwner{std::move(tp)}, ThreadPoolFacade(shared_tp_.get()) {}
+};
+
 void ExposeThreadPool(py::module &m) {
   py::class_<ThreadPool, std::shared_ptr<ThreadPool>>(m, "_ThreadPool")
     .def(py::init([](
@@ -2404,17 +2416,38 @@ void ExposeThreadPool(py::module &m) {
           bool set_affinity,
           std::string_view name) {
       if (!device_id.has_value()) {
+        device_id = CPU_ONLY_DEVICE_ID;
+      } else if (*device_id == -1) {
         int dev = 0;
         CUDA_CALL(cudaGetDevice(&dev));
         device_id = dev;
       }
-      return std::make_shared<ThreadPool>(num_threads, *device_id, set_affinity, name.data());
+      return std::make_shared<OldThreadPool>(num_threads, *device_id, set_affinity, name.data());
+    }),
+    "num_threads"_a,
+    "device_id"_a = -1,
+    "set_affinity"_a = false,
+    "name"_a = "")
+    .def_property_readonly("num_threads", &ThreadPool::NumThreads);
+}
+
+void ExposeNewThreadPool(py::module &m) {
+  py::class_<ThreadPoolBase, std::shared_ptr<ThreadPoolBase>>(m, "_NewThreadPool")
+    .def(py::init([](
+          int num_threads,
+          std::optional<int> device_id,
+          bool set_affinity,
+          std::string_view name) {
+      return std::make_shared<NewThreadPool>(num_threads, device_id, set_affinity, name.data());
     }),
     "num_threads"_a,
     "device_id"_a = py::none(),
     "set_affinity"_a = false,
     "name"_a = "")
-    .def_property_readonly("num_threads", &ThreadPool::NumThreads);
+    .def_property_readonly("num_threads", &ThreadPoolBase::NumThreads)
+    .def("_create_facade", [](std::shared_ptr<ThreadPoolBase> tp)->std::shared_ptr<ThreadPool> {
+      return std::make_shared<PyThreadPoolFacade>(std::move(tp));
+    });
 }
 
 void ExposeWorkspace(py::module &m) {
@@ -2473,7 +2506,8 @@ void ExposeWorkspace(py::module &m) {
 }
 
 void SetupAndRun(OperatorBase &self, Workspace &ws, std::optional<int> batch_size) {
-  DomainTimeRange setup_and_run_tr("SetupAndRun " + GetOpDisplayName(self.GetSpec(), true));
+  DomainTimeRange setup_and_run_tr("SetupAndRun " + GetOpDisplayName(self.GetSpec(), true),
+                                   kDynamicDefaultColor);
   std::vector<dali::OutputDesc> out_descs;
   const auto &spec = self.GetSpec();
   if (ws.NumOutput() != 0)
@@ -2543,7 +2577,8 @@ void SetupAndRun(OperatorBase &self, Workspace &ws, std::optional<int> batch_siz
   }
 
   {
-    DomainTimeRange setup_tr("Setup " + GetOpDisplayName(self.GetSpec(), true));
+    DomainTimeRange setup_tr("Setup " + GetOpDisplayName(self.GetSpec(), true),
+                             kDynamicDefaultColor);
     if (self.Setup(out_descs, ws)) {
       for (int i = 0; i < ws.NumOutput(); i++) {
         if (ws.OutputIsType<CPUBackend>(i))
@@ -2554,11 +2589,12 @@ void SetupAndRun(OperatorBase &self, Workspace &ws, std::optional<int> batch_siz
     }
   }
   {
-    DomainTimeRange run_tr("Run " + GetOpDisplayName(self.GetSpec(), true));
+    DomainTimeRange run_tr("Run " + GetOpDisplayName(self.GetSpec(), true), kDynamicDefaultColor);
     self.Run(ws);
   }
 
-  DomainTimeRange setup_tr("Adjust CPU output stream " + GetOpDisplayName(self.GetSpec(), true));
+  DomainTimeRange setup_tr("Adjust CPU output stream " + GetOpDisplayName(self.GetSpec(), true),
+                           kDynamicDefaultColor);
   for (int i = 0; i < spec.NumOutput(); i++) {
     if (ws.OutputIsType<CPUBackend>(i)) {
       auto &out = ws.Output<CPUBackend>(i);
@@ -2571,17 +2607,17 @@ void SetupAndRun(OperatorBase &self, Workspace &ws, std::optional<int> batch_siz
 void ExposeOperator(py::module &m) {
   py::class_<OperatorBase, std::unique_ptr<OperatorBase>>(m, "_Operator")
     .def(py::init([](const OpSpec &spec) {
-      DomainTimeRange tr("Instantiate " + GetOpDisplayName(spec, true));
+      DomainTimeRange tr("Instantiate " + GetOpDisplayName(spec, true), kDynamicDefaultColor);
       return dali::InstantiateOperator(spec);
     }))
     .def("Setup", [](OperatorBase &self, std::vector<dali::OutputDesc> &out_descs, Workspace &ws) {
       py::gil_scoped_release interpreter_unlock{};
-      DomainTimeRange tr("Setup " + GetOpDisplayName(self.GetSpec(), true));
+      DomainTimeRange tr("Setup " + GetOpDisplayName(self.GetSpec(), true), kDynamicDefaultColor);
       return self.Setup(out_descs, ws);
     })
     .def("Run", [](OperatorBase &self, Workspace &ws) {
       py::gil_scoped_release interpreter_unlock{};
-      DomainTimeRange tr("Run " + GetOpDisplayName(self.GetSpec(), true));
+      DomainTimeRange tr("Run " + GetOpDisplayName(self.GetSpec(), true), kDynamicDefaultColor);
       self.Run(ws);
     } )
     .def("SetupAndRun", [](OperatorBase &self, PyWorkspace &ws, std::optional<int> batch_size) {
@@ -2841,6 +2877,7 @@ PYBIND11_MODULE(backend_impl, m, py::mod_gil_not_used()) {
   ExposePipelineParams(m);
   ExposePipeline(m);
   ExposeThreadPool(m);
+  ExposeNewThreadPool(m);
   ExposeWorkspace(m);
   ExposeOperator(m);
 

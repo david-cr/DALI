@@ -17,7 +17,7 @@ from . import _op_builder
 from . import _invocation
 from . import _device
 from ._batch import as_batch, batch, Batch, Tensor
-import nvtx
+from ._nvtx import NVTXRange
 
 
 def is_uniform(shape):
@@ -35,6 +35,7 @@ class BatchToTensor:
     Only a minimal required subset of ``Operator`` interface is implemented.
     """
 
+    @NVTXRange("__call__: Batch2Tensor", category="op_builder")
     def __call__(
         self,
         batch,
@@ -48,12 +49,12 @@ class BatchToTensor:
     ):
         if not isinstance(batch, Batch):
             batch = _op_builder._to_batch(batch, batch_size)
-        with nvtx.annotate("__call__: construct Invocation", domain="op_builder"):
+        with NVTXRange("__call__: construct Invocation", category="op_builder"):
             invocation = _invocation.Invocation(
                 self,
                 None,
-                [batch],
-                {
+                inputs=[batch],
+                args={
                     "pad": pad,
                     "force_copy": force_copy,
                     "device": device,
@@ -63,7 +64,9 @@ class BatchToTensor:
                 is_batch=False,
                 batch_size=None,
                 previous_invocation=None,
-                caller_depth=3,
+                # Increase the caller depth because this operator is used only internally
+                # This allows us to skip the internal frame to point to the user code
+                caller_depth=_op_builder._get_caller_depth(False) + 1,
             )
         invocation.apply_eval_policy(_op_builder.is_external(batch))
         return Tensor(invocation_result=invocation[0])

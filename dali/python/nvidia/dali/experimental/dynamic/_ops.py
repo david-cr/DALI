@@ -22,11 +22,11 @@ from ._batch import Batch, as_batch as _as_batch, _get_batch_size
 from ._device import Device, DeviceLike
 from ._tensor import Tensor
 
-import nvtx
+from ._nvtx import NVTXRange
 
 
 def _to_tensor(x, device=None, dtype=None):
-    with nvtx.annotate("to_tensor", domain="op_builder"):
+    with NVTXRange("to_tensor", category="op_builder"):
         if x is None:
             return None
         if isinstance(x, Tensor):
@@ -42,64 +42,64 @@ def _to_tensor(x, device=None, dtype=None):
         return Tensor(x, device=device, dtype=dtype)
 
 
+@NVTXRange("to_batch", category="op_builder")
 def _to_batch(x, batch_size, device=None, dtype=None):
-    with nvtx.annotate("to_batch", domain="op_builder"):
-        if x is None:
-            return None
-        if isinstance(x, Batch):
-            if dtype is not None and x.dtype != dtype:
-                return _as_batch(x, dtype=dtype, device=device)
-            if device is not None:
-                return x.to_device(device)
-            return x
-        if isinstance(x, _invocation.InvocationResult):
-            if x.is_batch:
-                return Batch(invocation_result=x, device=device, dtype=dtype)
-            else:
-                x = _to_tensor(x, dtype=dtype)  # fall back to regular replication
-        actual_batch_size = _get_batch_size(x)
-        if actual_batch_size is not None:
-            if batch_size is not None and actual_batch_size != batch_size:
-                raise ValueError(f"Unexpected batch size: {actual_batch_size} != {batch_size}")
-            return Batch(x, device=device, dtype=dtype)
-
-        return Batch.broadcast(x, batch_size, device=device, dtype=dtype)
-
-
-def _get_input_device(x):
-    with nvtx.annotate("get_input_device", domain="op_builder"):
-        if x is None:
-            return None
-        if isinstance(x, Batch):
-            return x.device
-        if isinstance(x, Tensor):
-            return x.device
-        if isinstance(x, _b.TensorListCPU):
-            return _device.Device("cpu")
-        if isinstance(x, _b.TensorListGPU):
-            return _device.Device("gpu")
-        if hasattr(x, "__cuda_array_interface__"):
-            return _device.Device("gpu")
-        if hasattr(x, "__dlpack_device__"):
-            dev = x.__dlpack_device__()
-            if int(dev[0]) == 1 or int(dev[0]) == 3:  # CPU or CPU_PINNED
-                return _device.Device("cpu")
-            elif int(dev[0]) == 2:
-                return _device.Device("gpu", dev[1])
-            else:
-                raise ValueError(f"Unknown DLPack device type: {dev.type}")
-        if hasattr(x, "__dlpack__"):
-            return _device.Device("cpu")
-        if isinstance(x, list) and x:
-            return _get_input_device(x[0])
+    if x is None:
         return None
+    if isinstance(x, Batch):
+        if dtype is not None and x.dtype != dtype:
+            return _as_batch(x, dtype=dtype, device=device)
+        if device is not None:
+            return x.to_device(device)
+        return x
+    if isinstance(x, _invocation.InvocationResult):
+        if x.is_batch:
+            return Batch(invocation_result=x, device=device, dtype=dtype)
+        else:
+            x = _to_tensor(x, dtype=dtype)  # fall back to regular replication
+    actual_batch_size = _get_batch_size(x)
+    if actual_batch_size is not None:
+        if batch_size is not None and actual_batch_size != batch_size:
+            raise ValueError(f"Unexpected batch size: {actual_batch_size} != {batch_size}")
+        return Batch(x, device=device, dtype=dtype)
+
+    return Batch.broadcast(x, batch_size, device=device, dtype=dtype)
+
+
+@NVTXRange("get_input_device", category="op_builder")
+def _get_input_device(x):
+    if x is None:
+        return None
+    if isinstance(x, Batch):
+        return x.device
+    if isinstance(x, Tensor):
+        return x.device
+    if isinstance(x, _b.TensorListCPU):
+        return _device.Device("cpu")
+    if isinstance(x, _b.TensorListGPU):
+        return _device.Device("gpu")
+    if hasattr(x, "__cuda_array_interface__"):
+        return _device.Device("gpu")
+    if hasattr(x, "__dlpack_device__"):
+        dev = x.__dlpack_device__()
+        if int(dev[0]) == 1 or int(dev[0]) == 3:  # CPU or CPU_PINNED
+            return _device.Device("cpu")
+        elif int(dev[0]) == 2:
+            return _device.Device("gpu", dev[1])
+        else:
+            raise ValueError(f"Unknown DLPack device type: {dev.type}")
+    if hasattr(x, "__dlpack__"):
+        return _device.Device("cpu")
+    if isinstance(x, list) and x:
+        return _get_input_device(x[0])
+    return None
 
 
 def _infer_batch_size(explicit_batch_size, *raw_args, **raw_kwargs):
     if explicit_batch_size is not None:
         return explicit_batch_size
     batch_size = None
-    with nvtx.annotate("_infer_batch_size", domain="op_builder"):
+    with NVTXRange("_infer_batch_size", category="op_builder"):
         for i, x in enumerate(list(raw_args) + list(raw_kwargs.values())):
             x_batch_size = _get_batch_size(x)
             if x_batch_size is not None:
@@ -285,6 +285,14 @@ class Operator:
 
     @classmethod
     def _process_params(cls, backend, op_device, batch_size, *raw_args, **raw_kwargs):
+        """
+        Processes run-time parameters passed to the operator to ones that can be consumed DALI
+        (Batch or Tensor).
+
+        This is a class method, as it doesn't require an operator instance - and this method
+        is essential for proper operator instance caching, as input/argument metadata is a part
+        of the operator cache key.
+        """
         is_batch = batch_size is not None
         if cls._has_random_state_arg:
             from . import random
@@ -312,7 +320,7 @@ class Operator:
         kwargs = {}
 
         if is_batch:
-            with nvtx.annotate("__call__: convert to batches", domain="op_builder"):
+            with NVTXRange("__call__: convert to batches", category="op_builder"):
                 for i, inp in enumerate(raw_args):
                     if inp is None:
                         continue
@@ -325,7 +333,7 @@ class Operator:
                     dtype = cls._argument_conversion_map[k]
                     kwargs[k] = _to_batch(v, batch_size, device=_device.Device("cpu"), dtype=dtype)
         else:
-            with nvtx.annotate("__call__: convert to tensors", domain="op_builder"):
+            with NVTXRange("__call__: convert to tensors", category="op_builder"):
                 for inp in raw_args:
                     if inp is None:
                         continue
@@ -347,12 +355,6 @@ class Operator:
 
     def _is_backend_initialized(self):
         return self._op_backend is not None
-
-    def _reset_backend(self):
-        self._op_backend = None
-        self._op_spec = None
-        self._input_meta = []
-        self._arg_meta = {}
 
     def _init_spec(self, inputs, args):
         if self._op_spec is None:
@@ -418,10 +420,7 @@ class Operator:
         with self._device:
             with ctx:
                 self._init_spec(inputs, args)
-                if ctx._thread_pool is not None:
-                    self._op_spec.AddArg("num_threads", ctx._thread_pool.num_threads)
-                else:
-                    self._op_spec.AddArg("num_threads", 1)
+                self._op_spec.AddArg("num_threads", ctx.num_threads)
                 self._op_spec.AddArg(
                     "device_id",
                     (
@@ -465,7 +464,7 @@ class Operator:
                 self._check_compatible(inputs, batch_size, args)
 
             self._init_backend(ctx, inputs, args)
-            workspace = _b._Workspace(ctx._thread_pool, ctx.cuda_stream)
+            workspace = _b._Workspace(ctx.thread_pool._create_facade(), ctx.cuda_stream)
             for i, input in enumerate(inputs):
                 workspace.AddInput(self._to_batch(input).evaluate()._storage)
             for name, arg in args.items():
@@ -601,6 +600,14 @@ class Reader(Operator):
             if stick_to_shard is not None
             else _READER_SHARD_DEFAULTS["stick_to_shard"]
         )
+
+        self._raw_tensor_args = {}
+        self._tensor_args = {}
+        # Used to know when to recompute _tensor_args for _raw_tensor_args
+        self._previous_batch_size: int | None = None
+        # Used to make sure that args passed to the constructor are not repeated in __call__
+        self._tensor_arg_names: set[str] = set()
+
         if self._num_shards < 1:
             raise ValueError(
                 f"The number of shards must be a positive integer. Got {self._num_shards}."
@@ -658,17 +665,33 @@ class Reader(Operator):
             Therefore, it is impossible to traverse one reader using two iterators.
             If another iterator is necessary, create a separate reader instance.
         """
-        if batch_size is None:
-            batch_size = self._batch_size
+        batch_size = self._get_batch_size(batch_size)
         if batch_size is not None:
             return self._batches(batch_size, ctx)
         else:
             return self._samples(ctx)
 
-    def get_metadata(self) -> ReaderMeta:
+    def _process_tensor_args(self, batch_size: int | None):
+        """Converts stored tensor args to Batch/Tensor form for the given batch_size."""
+        if not self._raw_tensor_args:
+            return {}
+
+        if batch_size is None:
+            self._tensor_args = self._raw_tensor_args
+        elif self._previous_batch_size != batch_size:
+            self._tensor_args = {
+                name: Batch.broadcast(sample, batch_size)
+                for name, sample in self._raw_tensor_args.items()
+            }
+
+        self._previous_batch_size = batch_size
+        return self._tensor_args
+
+    def get_metadata(self, batch_size: int | None = None) -> ReaderMeta:
         """Returns the metadata of the underlying reader operator"""
 
-        self._init_backend(None, (), {})
+        batch_size = self._get_batch_size(batch_size)
+        self._init_backend(None, (), self._process_tensor_args(batch_size))
         return self._op_backend.GetReaderMeta()
 
     def _samples(self, ctx: _eval_context.EvalContext | None = None):
@@ -687,14 +710,16 @@ class Reader(Operator):
                     self._actual_batch_size = 1
                 if self._max_batch_size is None:
                     self._max_batch_size = self._actual_batch_size
-                self._init_backend(ctx, (), {})
+                self._init_backend(ctx, (), self._process_tensor_args(self._actual_batch_size))
+
+            tensor_args = self._process_tensor_args(self._actual_batch_size)
             meta = self._op_backend.GetReaderMeta()
             idx = 0
             padded_size = meta["epoch_size_padded"]
             shards_beg = math.floor(self._shard_id * padded_size / self._num_shards)
             shards_end = math.floor((self._shard_id + 1) * padded_size / self._num_shards)
             while idx < shards_end - shards_beg:
-                outputs = super()._run(ctx, batch_size=self._actual_batch_size)
+                outputs = super()._run(ctx, batch_size=self._actual_batch_size, **tensor_args)
                 batch_size = len(
                     outputs[0] if isinstance(outputs, tuple) else next(iter(outputs.values()))
                 )
@@ -732,20 +757,23 @@ class Reader(Operator):
                         f"{self._max_batch_size} specified when the operator was created"
                     )
                 self._max_batch_size = batch_size
-                self._init_backend(ctx, (), {})
+                tensor_args = self._process_tensor_args(batch_size)
+                self._init_backend(ctx, (), tensor_args)
             else:
                 if self._max_batch_size and self._max_batch_size != batch_size:
                     raise ValueError(
                         f"`batch_size` {batch_size} is different than the `max_batch_size` "
                         f"{self._max_batch_size} used in the previous call"
                     )
+                tensor_args = None
             meta = self._op_backend.GetReaderMeta()
             idx = 0
             padded_size = meta["epoch_size_padded"]
             shards_beg = math.floor(self._shard_id * padded_size / self._num_shards)
             shards_end = math.floor((self._shard_id + 1) * padded_size / self._num_shards)
             while idx < shards_end - shards_beg:
-                outputs = super()._run(ctx, batch_size=batch_size)
+                tensor_args = self._process_tensor_args(batch_size)
+                outputs = super()._run(ctx, batch_size=batch_size, **tensor_args)
                 batch_size_returned = batch_size = len(
                     outputs[0] if isinstance(outputs, tuple) else next(iter(outputs.values()))
                 )
@@ -757,6 +785,9 @@ class Reader(Operator):
                     yield {name: Batch(o) for name, o in outputs.items()}
             if not self._stick_to_shard:
                 self._shard_id = (self._shard_id + 1) % self._num_shards
+
+    def _get_batch_size(self, batch_size: int | None) -> int | None:
+        return batch_size if batch_size is not None else self._batch_size
 
 
 _all_ops = []
