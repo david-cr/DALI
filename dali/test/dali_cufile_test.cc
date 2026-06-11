@@ -1331,4 +1331,58 @@ TEST_F(DaliCUFileTest, FileDeletedAfterConstruction) {
   }
 }
 
+// Test 31: CUFileStream::Open - mmap option not supported (throws before construction)
+TEST_F(DaliCUFileTest, OpenWithMmapThrows) {
+  // This path triggers DALI_ENFORCE(!opts.use_mmap) which throws before any
+  // StdCUFileStream / CUFile resource is created, so it works regardless of
+  // whether CUFile is available on the system.
+  FileStream::Options opts{};
+  opts.read_ahead = false;
+  opts.use_mmap = true;
+  opts.use_odirect = false;
+
+  EXPECT_THROW({
+    auto stream = CUFileStream::Open(test_file_path_, opts);
+  }, DALIException);
+
+  // Same behavior when the uri carries the file:// prefix.
+  EXPECT_THROW({
+    auto stream = CUFileStream::Open("file://" + test_file_path_, opts);
+  }, DALIException);
+}
+
+// Test 32: CUFileStream::Open - file:// prefix is stripped and stream is opened
+TEST_F(DaliCUFileTest, OpenWithFilePrefix) {
+  // Skip if CUFile is not available
+  if (!cuFileIsSymbolAvailable("cuFileRead")) {
+    GTEST_SKIP() << "CUFile not available on this system";
+  }
+
+  try {
+    FileStream::Options opts{};
+    opts.read_ahead = false;
+    opts.use_mmap = false;
+    opts.use_odirect = false;
+
+    // uri with the file:// prefix exercises the prefix-stripping branch.
+    auto stream = CUFileStream::Open("file://" + test_file_path_, opts);
+    ASSERT_NE(stream, nullptr);
+    EXPECT_EQ(stream->Size(), test_data_.length());
+    EXPECT_EQ(stream->TellRead(), 0);
+
+    // uri without the prefix exercises the else branch.
+    auto stream_no_prefix = CUFileStream::Open(test_file_path_, opts);
+    ASSERT_NE(stream_no_prefix, nullptr);
+    EXPECT_EQ(stream_no_prefix->Size(), test_data_.length());
+
+  } catch (const CUFileError& e) {
+    if (e.result().err == CU_FILE_PLATFORM_NOT_SUPPORTED ||
+        e.result().err == CU_FILE_DEVICE_NOT_SUPPORTED) {
+      GTEST_SKIP() << "CUFile not supported on this platform/device";
+    } else {
+      throw;
+    }
+  }
+}
+
 }  // namespace dali
