@@ -383,6 +383,9 @@ def test_optical_flow(device):
 
 @sign_off("decoders.inflate")
 def test_inflate():
+    # Skip if DALI was built without nvCOMP support (no inflate operator).
+    if not hasattr(fn.decoders, "inflate"):
+        raise SkipTest("DALI built without nvCOMP - decoders.inflate unavailable")
     try:
         import lz4.block
     except ImportError:
