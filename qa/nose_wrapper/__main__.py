@@ -3,6 +3,9 @@ import sys
 # before running the test we add dali/test/python to the python path
 import nose_utils  # noqa:F401  - for Python 3.10
 from nose.core import run_exit
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from vcast_plugin import VCastCoverage
 import inspect
 
 if sys.version_info >= (3, 11):
@@ -16,4 +19,4 @@ if sys.version_info >= (3, 11):
 if sys.argv[0].endswith("__main__.py"):
     sys.argv[0] = "%s -m nose_wrapper" % sys.executable
 
-run_exit()
+run_exit(addplugins=[VCastCoverage()])
