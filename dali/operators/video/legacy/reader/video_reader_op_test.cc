@@ -244,11 +244,10 @@ TEST_F(VIDEO_READER_TEST_CLASS, PackedBFrames) {
       ASSERT_EQ(frames_shape[0][0], sequence_length);
     }
   };
-  if (strcmp(VIDEO_READER_OP_STR, "experimental__readers__Video") == 0) {
-    test();
-  } else {
-    EXPECT_THROW(test(), std::runtime_error);
-  }
+  // Both readers now handle packed B-frames correctly.
+  // (Originally the legacy reader threw runtime_error here; FFmpeg builds with
+  // -enable-bsf=mpeg4_unpack_bframes now un-pack them automatically.)
+  test();
 }
 
 inline bool IsUnsupportedCodec(const char *error_message) {
