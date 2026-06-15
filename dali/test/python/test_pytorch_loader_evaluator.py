@@ -19,10 +19,12 @@ import unittest
 import sys
 from io import StringIO
 
+# Import DALI before torch: importing torch first triggers a heap
+# corruption (double-free / invalid pointer) when nvidia.dali is then loaded.
+from nvidia.dali.plugin.pytorch.loader_evaluator import LoaderEvaluator  # noqa: E402
+
 import torch
 from torch.utils.data import DataLoader, TensorDataset
-
-from nvidia.dali.plugin.pytorch.loader_evaluator import LoaderEvaluator  # noqa: E402
 
 
 class TestLoaderEvaluatorBasic(unittest.TestCase):
