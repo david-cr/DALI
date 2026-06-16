@@ -16,6 +16,12 @@
 #include <gtest/gtest.h>
 #include <atomic>
 #include <cstdlib>
+#include <functional>
+#include <optional>
+#include <stdexcept>
+#include <vector>
+#include "dali/core/multi_error.h"
+#include "dali/pipeline/util/new_thread_pool.h"
 
 namespace dali {
 
@@ -241,6 +247,95 @@ TEST(ThreadPool, AffinityMaskInsufficientEntries) {
   } else {
     unsetenv("DALI_AFFINITY_MASK");
   }
+}
+
+// ---------------------------------------------------------------------------
+// NewThreadPool / ThreadPoolFacade tests
+// ---------------------------------------------------------------------------
+
+TEST(NewThreadPool, CpuOnlyDeviceIdNormalized) {
+  // device_id == CPU_ONLY_DEVICE_ID is normalized to nullopt in the constructor.
+  NewThreadPool tp(2, CPU_ONLY_DEVICE_ID, false, "new-tp-cpu");
+  ThreadPoolFacade facade(&tp);
+  std::atomic<int> count{0};
+  facade.AddWork([&count](int) { count++; });
+  facade.RunAll();
+  EXPECT_EQ(count.load(), 1);
+}
+
+TEST(NewThreadPoolFacade, AddWorkVoidOverload) {
+  // Exercises AddWork(std::function<void()>) (the parameterless overload).
+  NewThreadPool tp(4, std::nullopt, false, "new-tp");
+  ThreadPoolFacade facade(&tp);
+  std::atomic<int> count{0};
+  for (int i = 0; i < 10; i++)
+    facade.AddWork([&count]() { count++; });
+  facade.RunAll();
+  EXPECT_EQ(count.load(), 10);
+}
+
+TEST(NewThreadPoolFacade, RunAllNoWaitThenWaitStartedJob) {
+  // RunAll(false) starts the job; a subsequent RunAll(true) takes the
+  // already-started Wait() path.
+  NewThreadPool tp(4, std::nullopt, false, "new-tp");
+  ThreadPoolFacade facade(&tp);
+  std::atomic<int> count{0};
+  for (int i = 0; i < 8; i++)
+    facade.AddWork([&count](int) { count++; });
+  facade.RunAll(false);
+  facade.RunAll(true);
+  EXPECT_EQ(count.load(), 8);
+}
+
+TEST(NewThreadPoolFacade, MultipleJobsRunAndWait) {
+  // Adding work after a job has started creates a second job; RunAll(true) with
+  // more than one job takes the multi-job branch.
+  NewThreadPool tp(4, std::nullopt, false, "new-tp");
+  ThreadPoolFacade facade(&tp);
+  std::atomic<int> count{0};
+  facade.AddWork([&count](int) { count++; });
+  facade.RunAll(false);                          // job1 started
+  facade.AddWork([&count](int) { count++; });    // creates job2
+  facade.RunAll(true);                           // jobs_.size() > 1
+  EXPECT_EQ(count.load(), 2);
+}
+
+TEST(NewThreadPoolFacade, NumThreadsAndThreadIds) {
+  NewThreadPool tp(4, std::nullopt, false, "new-tp");
+  ThreadPoolFacade facade(&tp);
+  EXPECT_EQ(facade.NumThreads(), 4);
+  auto ids = facade.GetThreadIds();
+  EXPECT_EQ(ids.size(), 4u);
+}
+
+TEST(NewThreadPoolFacade, WaitForWorkWithoutRunThrows) {
+  // WaitForWork on an unstarted job throws logic_error. The facade destructor
+  // then runs the pending no-op job.
+  NewThreadPool tp(2, std::nullopt, false, "new-tp");
+  ThreadPoolFacade facade(&tp);
+  facade.AddWork([](int) {});
+  EXPECT_THROW(facade.WaitForWork(), std::logic_error);
+}
+
+TEST(NewThreadPoolFacade, SingleExceptionRethrown) {
+  // One throwing task -> Job::Wait rethrows the single exception, which the
+  // facade collects and rethrows.
+  NewThreadPool tp(2, std::nullopt, false, "new-tp");
+  ThreadPoolFacade facade(&tp);
+  facade.AddWork([](int) { throw std::runtime_error("boom"); });
+  facade.RunAll(false);
+  EXPECT_THROW(facade.WaitForWork(), std::runtime_error);
+}
+
+TEST(NewThreadPoolFacade, MultipleExceptionsWrapped) {
+  // Two throwing tasks in one job -> Job::Wait throws MultipleErrors, which the
+  // facade unwraps and rethrows as MultipleErrors.
+  NewThreadPool tp(4, std::nullopt, false, "new-tp");
+  ThreadPoolFacade facade(&tp);
+  facade.AddWork([](int) { throw std::runtime_error("a"); });
+  facade.AddWork([](int) { throw std::runtime_error("b"); });
+  facade.RunAll(false);
+  EXPECT_THROW(facade.WaitForWork(), MultipleErrors);
 }
 
 }  // namespace test
