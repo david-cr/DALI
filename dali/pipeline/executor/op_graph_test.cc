@@ -1556,6 +1556,45 @@ TEST_F(OpGraphTest, TestCPUOpWithArgumentInput) {
   }
 }
 
+TEST_F(OpGraphTest, TestInconsistentTensorStorageDevice) {
+  // Build a valid CPU -> CPU graph, then corrupt a tensor edge so that the
+  // producer and a consumer disagree on the storage device. This triggers the
+  // CheckConsistentTensorEdges DALI_ENFORCE failure path.
+  OpGraph graph;
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("cpu_data", StorageDevice::CPU)), "src");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("Copy")
+          .AddArg("device", "cpu")
+          .AddInput("cpu_data", StorageDevice::CPU)
+          .AddOutput("copy_data", StorageDevice::CPU)), "copy");
+
+  // The graph is valid as built.
+  ASSERT_NO_THROW(CheckGraphConstraints(graph));
+
+  // Find a tensor that has at least one consumer and corrupt that consumer edge
+  // so its storage device no longer matches the producer's storage device.
+  bool corrupted = false;
+  for (int i = 0; i < graph.NumTensor(); i++) {
+    auto& tensor = graph.Tensor(i);
+    if (!tensor.consumers.empty()) {
+      tensor.consumers[0].storage_device =
+          (tensor.producer.storage_device == StorageDevice::CPU) ? StorageDevice::GPU
+                                                                 : StorageDevice::CPU;
+      corrupted = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(corrupted) << "Expected at least one consumed tensor in the graph";
+
+  // Now producer and consumer disagree on storage device -> verification throws.
+  ASSERT_THROW(CheckGraphConstraints(graph), std::exception);
+}
+
 // ====================================================================================
 // STEP 1: Tests for swap operations with consumers
 // Targets uncovered lines in SwapTensorNodes (248-255) and SwapOpNodes (330-331, 338-339)
