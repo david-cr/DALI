@@ -151,4 +151,32 @@ TEST_F(SnapshotSerializerTest, VectorCurandStateRoundTrip) {
   }
 }
 
+// Malformed protobuf wire data: a length-delimited field (tag 0x0a) that claims
+// 16 payload bytes but provides none. ParseFromString must fail, exercising the
+// DALI_ENFORCE failure paths in the Deserialize overloads. These do not require
+// a GPU since the parse failure happens before any device work.
+namespace {
+const std::string kInvalidProtobuf("\x0a\x10", 2);
+}  // namespace
+
+TEST_F(SnapshotSerializerTest, DeserializeMt19937InvalidData) {
+  EXPECT_THROW(SnapshotSerializer().Deserialize<std::vector<std::mt19937>>(kInvalidProtobuf),
+               DALIException);
+}
+
+TEST_F(SnapshotSerializerTest, DeserializeMt19937_64InvalidData) {
+  EXPECT_THROW(SnapshotSerializer().Deserialize<std::vector<std::mt19937_64>>(kInvalidProtobuf),
+               DALIException);
+}
+
+TEST_F(SnapshotSerializerTest, DeserializeCurandStateInvalidData) {
+  EXPECT_THROW(SnapshotSerializer().Deserialize<std::vector<curandState>>(kInvalidProtobuf),
+               DALIException);
+}
+
+TEST_F(SnapshotSerializerTest, DeserializeLoaderStateInvalidData) {
+  EXPECT_THROW(SnapshotSerializer().Deserialize<LoaderStateSnapshot>(kInvalidProtobuf),
+               DALIException);
+}
+
 }  // namespace dali
