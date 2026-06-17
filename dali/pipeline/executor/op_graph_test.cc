@@ -2037,4 +2037,141 @@ TEST_F(OpGraphTest, CreateEventsForMixedOpsMultiple) {
   EXPECT_EQ(events[1].size(), mixed_queue_depth);
 }
 
+// ====================================================================================
+// Tests targeting CheckOpConstraints error paths and graph-mutation internals
+// (lowered_graph.cc). Copy is declared NumInput(1)/NumOutput(1) and has no in-place
+// support, which makes it a convenient way to violate each constraint.
+// ====================================================================================
+
+// CheckOpConstraints: fewer inputs than the schema minimum (min-input enforce).
+TEST_F(OpGraphTest, TestFailureTooFewInputs) {
+  OpGraph graph;
+
+  // Copy requires exactly one input; provide none.
+  ASSERT_THROW(
+      graph.AddOp(this->PrepareSpec(
+              OpSpec("Copy")
+              .AddArg("device", "cpu")
+              .AddOutput("copy_data", StorageDevice::CPU)), ""),
+      std::runtime_error);
+}
+
+// CheckOpConstraints: more inputs than the schema maximum (max-input enforce).
+TEST_F(OpGraphTest, TestFailureExceedMaxInputs) {
+  OpGraph graph;
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("a", StorageDevice::CPU)), "");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("b", StorageDevice::CPU)), "");
+
+  // Copy accepts a maximum of one input; provide two.
+  ASSERT_THROW(
+      graph.AddOp(this->PrepareSpec(
+              OpSpec("Copy")
+              .AddArg("device", "cpu")
+              .AddInput("a", StorageDevice::CPU)
+              .AddInput("b", StorageDevice::CPU)
+              .AddOutput("copy_data", StorageDevice::CPU)), ""),
+      std::runtime_error);
+}
+
+// CheckOpConstraints: in-place requested on an operator that does not support it.
+TEST_F(OpGraphTest, TestFailureInPlaceUnsupported) {
+  OpGraph graph;
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("data", StorageDevice::CPU)), "");
+
+  // Copy does not implement in-place execution.
+  ASSERT_THROW(
+      graph.AddOp(this->PrepareSpec(
+              OpSpec("Copy")
+              .AddArg("device", "cpu")
+              .AddArg("inplace", true)
+              .AddInput("data", StorageDevice::CPU)
+              .AddOutput("copy_data", StorageDevice::CPU)), ""),
+      std::runtime_error);
+}
+
+// OpGraph::Lower must reject a target graph that is not empty.
+TEST_F(OpGraphTest, TestLowerIntoNonEmptyGraphThrows) {
+  OpGraph graph;
+
+  // Make the target graph non-empty.
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddArg("device_id", 0)
+          .AddOutput("data", StorageDevice::CPU)), "es");
+
+  OpSpec spec = this->PrepareSpec(OpSpec("ExternalSource")
+      .AddArg("device", "cpu")
+      .AddArg("device_id", 0)
+      .AddOutput("data2", StorageDevice::CPU));
+
+  graph::OpGraph::Builder b;
+  b.Add("es2", spec);
+  b.AddOutput("data2_cpu");
+  auto def = std::move(b).GetGraph(true);
+
+  // Lowering into a non-empty graph is a logic error.
+  EXPECT_THROW(graph.Lower(def), std::logic_error);
+}
+
+// Removing a "dead" low-id op (whose output is never consumed, so it has no
+// children) from a graph that also contains a downstream consumed chain forces
+// the dense re-indexing to bubble the removed tensor/op past nodes that DO have
+// consumers/children. This exercises the consumer-update loop in SwapTensorNodes
+// and the children-update loops in SwapOpNodes, which the existing removal tests
+// (which only remove trailing leaf nodes) do not reach.
+TEST_F(OpGraphTest, TestRemoveDeadOpReindexesConsumedNodes) {
+  OpGraph graph;
+
+  // op0: produces a tensor that nobody consumes -> op0 has no children.
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("dead_data", StorageDevice::CPU)), "dead");
+
+  // op1 -> op2: a consumed chain with higher tensor/op ids than op0.
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("ExternalSource")
+          .AddArg("device", "cpu")
+          .AddOutput("live_data", StorageDevice::CPU)), "src");
+
+  graph.AddOp(this->PrepareSpec(
+          OpSpec("Copy")
+          .AddArg("device", "cpu")
+          .AddInput("live_data", StorageDevice::CPU)
+          .AddOutput("out_data", StorageDevice::CPU)), "consumer");
+
+  ASSERT_EQ(graph.NumOp(), 3);
+  ASSERT_EQ(graph.NumTensor(), 3);
+
+  // Remove the dead op; this re-indexes the consumed chain.
+  graph.RemoveOp(0);
+
+  ASSERT_EQ(graph.NumOp(), 2);
+  ASSERT_EQ(graph.NumTensor(), 2);
+
+  // The surviving src -> consumer chain must remain intact.
+  auto src_id = graph.NodeId("src");
+  auto cons_id = graph.NodeId("consumer");
+  ASSERT_TRUE(src_id.has_value());
+  ASSERT_TRUE(cons_id.has_value());
+  ASSERT_TRUE(graph.Node(*src_id).children.count(*cons_id) > 0);
+
+  auto live_id = graph.TensorId("live_data_cpu");
+  ASSERT_TRUE(live_id.has_value());
+  ASSERT_EQ(graph.Tensor(*live_id).consumers.size(), 1u);
+}
+
 }  // namespace dali
