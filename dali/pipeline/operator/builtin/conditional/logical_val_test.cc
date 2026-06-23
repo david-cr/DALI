@@ -440,6 +440,68 @@ TYPED_TEST(LogicalNotDataTypeTest, TestDataType) {
   this->RunAndValidate(pipe, input_data);
 }
 
+// ============================================================================
+// Tests for the _conditional__ValidateLogical operator (validate_logical_expr.cc)
+// ============================================================================
+
+// Valid scalar bool input: SetupImpl validates and RunImpl passes the data
+// through unchanged (ShareData), so the output equals the input.
+TEST_F(LogicalNotTest, ValidateLogicalPassThroughBool) {
+  Pipeline pipe(kBatchSize, 4, 0);
+  AddExternalInput(pipe);
+  pipe.AddOperator(OpSpec("_conditional__ValidateLogical")
+                       .AddArg("device", "cpu")
+                       .AddArg("expression_name", "and")
+                       .AddArg("expression_side", "left")
+                       .AddInput("input", StorageDevice::CPU)
+                       .AddOutput("output", StorageDevice::CPU),
+                   "validate");
+
+  vector<std::pair<string, string>> outputs = {{"output", "cpu"}};
+  pipe.Build(outputs);
+
+  std::vector<bool> input_data = {true, false, true};
+  auto input = CreateInput(input_data);
+  pipe.SetExternalInput("input", input);
+  pipe.Run();
+
+  Workspace ws;
+  pipe.Outputs(&ws);
+  const auto &output = ws.Output<CPUBackend>(0);
+  ASSERT_EQ(output.num_samples(), static_cast<int>(input_data.size()));
+  EXPECT_EQ(output.type(), DALI_BOOL);
+  for (size_t i = 0; i < input_data.size(); ++i) {
+    EXPECT_EQ(*output.tensor<bool>(i), input_data[i]) << "Failed at sample " << i;
+  }
+}
+
+// Non-bool scalar input: SetupImpl's EnforceConditionalInputKind (enforce_type)
+// rejects the input. The new executor surfaces operator Setup errors when the
+// outputs are awaited, so the exception is observed across Run()+Outputs().
+TEST_F(LogicalNotTest, ValidateLogicalRejectsNonBool) {
+  Pipeline pipe(kBatchSize, 4, 0);
+  AddExternalInput(pipe);
+  pipe.AddOperator(OpSpec("_conditional__ValidateLogical")
+                       .AddArg("device", "cpu")
+                       .AddArg("expression_name", "or")
+                       .AddArg("expression_side", "right")
+                       .AddInput("input", StorageDevice::CPU)
+                       .AddOutput("output", StorageDevice::CPU),
+                   "validate");
+
+  vector<std::pair<string, string>> outputs = {{"output", "cpu"}};
+  pipe.Build(outputs);
+
+  std::vector<int32_t> input_data = {0, 1};  // int32 scalars -> not bool
+  auto input = CreateInput(input_data);
+  pipe.SetExternalInput("input", input);
+  EXPECT_THROW({
+    pipe.Run();
+    Workspace ws;
+    pipe.Outputs(&ws);
+  }, std::exception);
+}
+
 // Test suite for validation.cc functions
 class ValidationTest : public ::testing::Test {
  public:
