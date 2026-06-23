@@ -849,6 +849,77 @@ TEST_F(MergeUnitTest, DifferentDeviceIdBothPinnedFails) {
   }
 }
 
+// Test that merging inputs with a different number of sample dimensions fails.
+// Types match (so the type check passes) but the sample dimensions differ,
+// exercising the sample-dimension consistency enforce.
+TEST_F(MergeUnitTest, DifferentSampleDimFails) {
+  auto make_input = [](int ndim) {
+    auto tl = std::make_shared<TensorList<CPUBackend>>();
+    tl->set_pinned(false);
+    tl->set_device_id(CPU_ONLY_DEVICE_ID);
+    tl->set_type(DALI_FLOAT);
+    TensorShape<> sample_shape;
+    for (int i = 0; i < ndim; i++) {
+      sample_shape.shape.push_back(2);
+    }
+    tl->Resize(uniform_list_shape(2, sample_shape));
+    return tl;
+  };
+  auto input0 = make_input(2);  // 2-d samples
+  auto input1 = make_input(3);  // 3-d samples
+  auto predicate = CreatePredicate(4);  // 4 samples total (2 from each input)
+
+  auto ws = CreateWorkspace(input0, input1, predicate);
+
+  std::vector<OutputDesc> output_desc;
+  EXPECT_THROW({
+    merge_op_->SetupImpl(output_desc, *ws);
+  }, std::exception);
+
+  try {
+    merge_op_->SetupImpl(output_desc, *ws);
+    FAIL() << "Expected exception was not thrown";
+  } catch (const std::exception& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Found distinct sample dimensions:"), std::string::npos)
+        << "Expected sample dimension error message, got: " << error_msg;
+  }
+}
+
+// Test that a non-scalar predicate (1-d instead of scalar) fails the scalar
+// indexing enforce. The number of predicate samples matches the total input
+// sample count so the coverage enforce passes and the scalar-shape enforce is
+// the one that fires.
+TEST_F(MergeUnitTest, NonScalarPredicateFails) {
+  auto input0 = CreateTensorList(0, false, 2);  // device_id=0, pinned=false
+  auto input1 = CreateTensorList(0, false, 2);  // device_id=0, pinned=false
+
+  auto predicate = std::make_shared<TensorList<CPUBackend>>();
+  predicate->set_pinned(false);
+  predicate->set_device_id(CPU_ONLY_DEVICE_ID);
+  predicate->set_type(DALI_BOOL);
+  predicate->Resize(uniform_list_shape(4, TensorShape<1>{1}));  // 4 samples, 1-d
+  for (int i = 0; i < 4; i++) {
+    predicate->mutable_tensor<bool>(i)[0] = (i % 2 == 0);
+  }
+
+  auto ws = CreateWorkspace(input0, input1, predicate);
+
+  std::vector<OutputDesc> output_desc;
+  EXPECT_THROW({
+    merge_op_->SetupImpl(output_desc, *ws);
+  }, std::exception);
+
+  try {
+    merge_op_->SetupImpl(output_desc, *ws);
+    FAIL() << "Expected exception was not thrown";
+  } catch (const std::exception& e) {
+    std::string error_msg = e.what();
+    EXPECT_NE(error_msg.find("Only scalar indexing is supported."), std::string::npos)
+        << "Expected scalar indexing error message, got: " << error_msg;
+  }
+}
+
 TEST_F(SplitMergePinnedInputsTest, Mixes) {
   Pipeline pipe(kBatchSize, 4, 0);
   AddExternalInputs(pipe);
