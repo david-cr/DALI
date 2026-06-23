@@ -16,6 +16,8 @@
 #include "dali/pipeline/operator/error_reporting.h"
 #include <gtest/gtest.h>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include <system_error>
 #include "dali/pipeline/operator/op_spec.h"
@@ -351,6 +353,168 @@ TEST(ErrorReporting, PropagateErrorInvalidKeyDifferentMessages) {
     EXPECT_NE(error_msg.find("Table not found"), std::string::npos)
         << "Expected additional message, got: " << error_msg;
   }
+}
+
+// PropagateError: DaliError-derived exceptions have their message rewritten in
+// place and are rethrown (covers the catch (DaliError&) branch).
+TEST(ErrorReporting, PropagateErrorDaliError) {
+  ErrorInfo info;
+  info.context_info = "Dali ctx: ";
+  info.additional_message = " trailing";
+  info.exception = std::make_exception_ptr(DaliRuntimeError("original dali error"));
+
+  EXPECT_THROW(PropagateError(info), DaliError);
+
+  try {
+    PropagateError(info);
+    FAIL() << "Expected DaliError";
+  } catch (const DaliError &e) {
+    std::string m = e.what();
+    EXPECT_NE(m.find("Dali ctx: "), std::string::npos) << m;
+    EXPECT_NE(m.find("original dali error"), std::string::npos) << m;
+    EXPECT_NE(m.find(" trailing"), std::string::npos) << m;
+  }
+}
+
+// PropagateError: std::invalid_argument is rethrown as std::invalid_argument.
+TEST(ErrorReporting, PropagateErrorInvalidArgument) {
+  ErrorInfo info;
+  info.context_info = "ctx: ";
+  info.additional_message = " add";
+  info.exception = std::make_exception_ptr(std::invalid_argument("bad argument"));
+
+  EXPECT_THROW(PropagateError(info), std::invalid_argument);
+  try {
+    PropagateError(info);
+    FAIL();
+  } catch (const std::invalid_argument &e) {
+    std::string m = e.what();
+    EXPECT_NE(m.find("ctx: "), std::string::npos) << m;
+    EXPECT_NE(m.find("bad argument"), std::string::npos) << m;
+    EXPECT_NE(m.find(" add"), std::string::npos) << m;
+  }
+}
+
+// PropagateError: std::domain_error is rethrown as std::domain_error.
+TEST(ErrorReporting, PropagateErrorDomainError) {
+  ErrorInfo info;
+  info.context_info = "ctx: ";
+  info.exception = std::make_exception_ptr(std::domain_error("domain failure"));
+
+  EXPECT_THROW(PropagateError(info), std::domain_error);
+  try {
+    PropagateError(info);
+    FAIL();
+  } catch (const std::domain_error &e) {
+    EXPECT_NE(std::string(e.what()).find("domain failure"), std::string::npos);
+  }
+}
+
+// PropagateError: std::length_error is rethrown as std::length_error.
+TEST(ErrorReporting, PropagateErrorLengthError) {
+  ErrorInfo info;
+  info.context_info = "ctx: ";
+  info.exception = std::make_exception_ptr(std::length_error("too long"));
+
+  EXPECT_THROW(PropagateError(info), std::length_error);
+  try {
+    PropagateError(info);
+    FAIL();
+  } catch (const std::length_error &e) {
+    EXPECT_NE(std::string(e.what()).find("too long"), std::string::npos);
+  }
+}
+
+// PropagateError: std::out_of_range is rethrown as std::out_of_range.
+TEST(ErrorReporting, PropagateErrorOutOfRange) {
+  ErrorInfo info;
+  info.context_info = "ctx: ";
+  info.exception = std::make_exception_ptr(std::out_of_range("oor"));
+
+  EXPECT_THROW(PropagateError(info), std::out_of_range);
+  try {
+    PropagateError(info);
+    FAIL();
+  } catch (const std::out_of_range &e) {
+    EXPECT_NE(std::string(e.what()).find("oor"), std::string::npos);
+  }
+}
+
+// PropagateError: std::range_error is rethrown as std::range_error.
+TEST(ErrorReporting, PropagateErrorRangeError) {
+  ErrorInfo info;
+  info.context_info = "ctx: ";
+  info.exception = std::make_exception_ptr(std::range_error("range failure"));
+
+  EXPECT_THROW(PropagateError(info), std::range_error);
+  try {
+    PropagateError(info);
+    FAIL();
+  } catch (const std::range_error &e) {
+    EXPECT_NE(std::string(e.what()).find("range failure"), std::string::npos);
+  }
+}
+
+// PropagateError: a non-std::exception (caught by catch (...)) is mapped to a
+// std::runtime_error with the "Unknown critical error." message.
+TEST(ErrorReporting, PropagateErrorUnknown) {
+  ErrorInfo info;
+  info.context_info = "ctx: ";
+  info.additional_message = " add";
+  info.exception = std::make_exception_ptr(42);  // not derived from std::exception
+
+  EXPECT_THROW(PropagateError(info), std::runtime_error);
+  try {
+    PropagateError(info);
+    FAIL();
+  } catch (const std::runtime_error &e) {
+    std::string m = e.what();
+    EXPECT_NE(m.find("ctx: "), std::string::npos) << m;
+    EXPECT_NE(m.find("Unknown critical error."), std::string::npos) << m;
+    EXPECT_NE(m.find(" add"), std::string::npos) << m;
+  }
+}
+
+// GetErrorContextMessage with a non-empty origin stack exercises the stack-mention
+// branch and, transitively, FormatStack's frame loop including the context line.
+TEST(ErrorReporting, GetErrorContextMessageWithStack) {
+  OpSpec spec("PipelineCommonTest");
+  spec.AddArg("device", "cpu");
+  spec.AddArg("_origin_stack_filename", std::vector<std::string>{"my_file.py"});
+  spec.AddArg("_origin_stack_lineno", std::vector<int>{42});
+  spec.AddArg("_origin_stack_name", std::vector<std::string>{"my_func"});
+  spec.AddArg("_origin_stack_line", std::vector<std::string>{"x = fn.do_something()"});
+
+  std::string msg = GetErrorContextMessage(spec);
+
+  // device is upper-cased
+  EXPECT_NE(msg.find("CPU"), std::string::npos) << msg;
+  // non-empty stack mention branch
+  EXPECT_NE(msg.find("traceback"), std::string::npos) << msg;
+  // FormatStack frame contents
+  EXPECT_NE(msg.find("my_file.py"), std::string::npos) << msg;
+  EXPECT_NE(msg.find("my_func"), std::string::npos) << msg;
+  // FormatStack include_context line
+  EXPECT_NE(msg.find("x = fn.do_something()"), std::string::npos) << msg;
+}
+
+// Directly exercise FormatStack for both the include_context=false path and the
+// include_context=true-but-empty-line path (covers the compound condition where
+// the context line is skipped).
+TEST(ErrorReporting, FormatStackContextVariants) {
+  std::vector<PythonStackFrame> frames;
+  frames.emplace_back("first.py", 1, "first_fn", "first_line_code");
+  frames.emplace_back("second.py", 2, "second_fn", "");  // empty context line
+
+  // include_context = false: frames are listed but no context lines are emitted.
+  std::string without_context = FormatStack(frames, false);
+  EXPECT_NE(without_context.find("first.py"), std::string::npos) << without_context;
+  EXPECT_NE(without_context.find("second_fn"), std::string::npos) << without_context;
+  EXPECT_EQ(without_context.find("first_line_code"), std::string::npos) << without_context;
+
+  // include_context = true: the non-empty line is emitted, the empty one is skipped.
+  std::string with_context = FormatStack(frames, true);
+  EXPECT_NE(with_context.find("first_line_code"), std::string::npos) << with_context;
 }
 
 }  // namespace dali
