@@ -19,6 +19,7 @@
 #include "dali/pipeline/data/backend.h"
 #include "dali/pipeline/data/buffer.h"
 #include "dali/pipeline/data/tensor.h"
+#include "dali/pipeline/operator/name_utils.h"
 #include "dali/pipeline/operator/operator.h"
 #include "dali/pipeline/pipeline.h"
 #include "dali/pipeline/workspace/workspace.h"
@@ -685,6 +686,66 @@ TEST(OpSpecTest, ValidDevicesGPUOperator) {
     spec.AddInput("in1", StorageDevice::GPU);
     spec.AddInput("in2", StorageDevice::CPU);  // This should fail (GPU op expects GPU)
   }, std::runtime_error);
+}
+
+// ===== name_utils.cc coverage =====
+
+DALI_SCHEMA(DummyNameUtilsNoDox)
+  .NumInput(1).NumOutput(1);
+
+DALI_SCHEMA(DummyNameUtilsWithDox)
+  .NumInput(1).NumOutput(1)
+  .InputDox(0, "the_input", "Tensor", "documented input");
+
+// GetOpModule returns the `_module` argument verbatim.
+TEST(NameUtilsTest, GetOpModule) {
+  auto spec = OpSpec("DummyNameUtilsNoDox").AddArg("_module", "my.module"s);
+  EXPECT_EQ(GetOpModule(spec), "my.module");
+}
+
+// GetOpDisplayName without the module path returns just the display name.
+TEST(NameUtilsTest, GetOpDisplayNameNoModulePath) {
+  auto spec = OpSpec("DummyNameUtilsNoDox").AddArg("_display_name", "MyOp"s);
+  EXPECT_EQ(GetOpDisplayName(spec, false), "MyOp");
+}
+
+// GetOpDisplayName with the module path and a non-empty module prefixes it.
+TEST(NameUtilsTest, GetOpDisplayNameWithModulePath) {
+  auto spec = OpSpec("DummyNameUtilsNoDox")
+                  .AddArg("_display_name", "MyOp"s)
+                  .AddArg("_module", "my.module"s);
+  EXPECT_EQ(GetOpDisplayName(spec, true), "my.module.MyOp");
+}
+
+// GetOpDisplayName with the module path but an empty module returns just the name.
+TEST(NameUtilsTest, GetOpDisplayNameEmptyModule) {
+  auto spec = OpSpec("DummyNameUtilsNoDox")
+                  .AddArg("_display_name", "MyOp"s)
+                  .AddArg("_module", ""s);
+  EXPECT_EQ(GetOpDisplayName(spec, true), "MyOp");
+}
+
+// FormatInput for a schema without input docs omits the input name.
+TEST(NameUtilsTest, FormatInputNoDox) {
+  auto spec = OpSpec("DummyNameUtilsNoDox");
+  EXPECT_EQ(FormatInput(spec, 0, false), "input `0`");
+  EXPECT_EQ(FormatInput(spec, 2, true), "Input `2`");
+}
+
+// FormatInput for a schema with input docs includes the documented input name.
+TEST(NameUtilsTest, FormatInputWithDox) {
+  auto spec = OpSpec("DummyNameUtilsWithDox");
+  EXPECT_EQ(FormatInput(spec, 0, false), "input `0` ('__the_input')");
+  EXPECT_EQ(FormatInput(spec, 0, true), "Input `0` ('__the_input')");
+}
+
+// FormatOutput and FormatArgument formatting, capitalized and not.
+TEST(NameUtilsTest, FormatOutputAndArgument) {
+  auto spec = OpSpec("DummyNameUtilsNoDox");
+  EXPECT_EQ(FormatOutput(spec, 1, false), "output `1`");
+  EXPECT_EQ(FormatOutput(spec, 1, true), "Output `1`");
+  EXPECT_EQ(FormatArgument(spec, "foo", false), "argument 'foo'");
+  EXPECT_EQ(FormatArgument(spec, "foo", true), "Argument 'foo'");
 }
 
 }  // namespace dali
