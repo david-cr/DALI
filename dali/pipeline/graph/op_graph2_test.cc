@@ -379,6 +379,89 @@ TEST(NewOpGraphBuilderTest, SortAndPrune) {
   EXPECT_EQ(op2->outputs[1], o1);
 }
 
+// Erasing an operator that is not in the graph returns false.
+TEST(NewOpGraphTest, EraseOpUnknownReturnsFalse) {
+  OpGraph g;
+  EXPECT_FALSE(g.EraseOp("does_not_exist"));
+}
+
+// Erasing a data node that is not in the graph returns false.
+TEST(NewOpGraphTest, EraseDataUnknownReturnsFalse) {
+  OpGraph g;
+  EXPECT_FALSE(g.EraseData("does_not_exist"));
+}
+
+// Erasing a data node that has both a producer and a consumer must clear the
+// dangling references in the producer's outputs and the consumer's inputs.
+TEST(NewOpGraphTest, EraseDataClearsProducerAndConsumer) {
+  OpSpec spec1("dummy");
+  spec1.AddArg("device", "cpu");
+  spec1.AddOutput("m", StorageDevice::CPU);
+
+  OpSpec spec2("dummy");
+  spec2.AddArg("device", "cpu");
+  spec2.AddInput("m", StorageDevice::CPU);
+  spec2.AddOutput("o", StorageDevice::CPU);
+
+  OpGraph::Builder b;
+  b.Add("op1", spec1);
+  b.Add("op2", spec2);
+  b.AddOutput("o_cpu");
+  OpGraph g = std::move(b).GetGraph();  // no prune by default
+
+  auto *op1 = g.GetOp("op1");
+  auto *op2 = g.GetOp("op2");
+  ASSERT_NE(op1, nullptr);
+  ASSERT_NE(op2, nullptr);
+  auto *m = g.GetData("m_cpu");
+  ASSERT_NE(m, nullptr);
+  ASSERT_EQ(m->producer.op, op1);
+  ASSERT_EQ(op1->outputs[0], m);
+  ASSERT_EQ(op2->inputs[0], m);
+
+  EXPECT_TRUE(g.EraseData("m_cpu"));
+  EXPECT_EQ(g.GetData("m_cpu"), nullptr);
+  // The dangling references must have been cleared to null.
+  EXPECT_EQ(op1->outputs[0], nullptr);
+  EXPECT_EQ(op2->inputs[0], nullptr);
+}
+
+// Marking a non-existent data node as a pipeline output throws.
+TEST(NewOpGraphTest, AddOutputUnknownThrows) {
+  OpGraph g;
+  EXPECT_THROW(g.AddOutput("nonexistent"), std::invalid_argument);
+}
+
+// A data node may only have a single producer; declaring two operators that
+// produce the same output name must throw.
+TEST(NewOpGraphBuilderTest, DuplicateProducerThrows) {
+  OpSpec spec1("dummy");
+  spec1.AddArg("device", "cpu");
+  spec1.AddOutput("dup", StorageDevice::CPU);
+
+  OpSpec spec2("dummy");
+  spec2.AddArg("device", "cpu");
+  spec2.AddOutput("dup", StorageDevice::CPU);
+
+  OpGraph::Builder b;
+  b.Add("op1", spec1);
+  EXPECT_THROW(b.Add("op2", spec2), std::invalid_argument);
+}
+
+// Building without pruning and then requesting a pruned build must re-sort the
+// graph (the prune-after-unpruned-build path of Builder::Build).
+TEST(NewOpGraphBuilderTest, BuildPruneAfterUnprunedBuild) {
+  OpSpec spec1("dummy");
+  spec1.AddArg("device", "cpu");
+  spec1.AddOutput("o", StorageDevice::CPU);
+
+  OpGraph::Builder b;
+  b.Add("op1", spec1);
+  b.AddOutput("o_cpu");
+  b.Build(false);  // initial build, not pruned
+  EXPECT_NO_THROW(b.Build(true));  // prune now: exercises the re-sort path
+}
+
 TEST(Graph2DotTest, GenerateDOTSimpleGraphNoColor) {
   // Test basic DOT generation without colors, with data nodes shown
   OpSpec spec1("dummy");
