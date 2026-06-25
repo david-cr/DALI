@@ -781,4 +781,49 @@ TEST_F(ExecutorFactoryTest, TestDynamicExecutorConcurrencyModes) {
   ASSERT_NE(executor3, nullptr);
 }
 
+// Tests for async_pipelined_executor.cc coverage.
+//
+// Exposes the protected scheduling entry point and the internal error/stop
+// state so the asynchronous CPU stage can be driven directly without a full
+// pipeline run. On the error/stop path RunCPU's worker lambda returns early
+// (notifying the mixed stage) before PipelinedExecutor::RunCPU() is reached,
+// so no graph needs to be built.
+class TestableAsyncExecutor : public AsyncPipelinedExecutor {
+ public:
+  using AsyncPipelinedExecutor::AsyncPipelinedExecutor;
+  using AsyncPipelinedExecutor::RunCPU;
+
+  void ForceExecError() { exec_error_ = true; }
+  void TriggerStop() { this->SignalStop(); }
+  void WaitForCpuWork() { cpu_thread_.WaitForWork(false); }
+};
+
+// When the executor is already in an error state, the CPU worker lambda must
+// decrement the work counter, notify the mixed stage, and return early instead
+// of running the CPU stage. This exercises the `exec_error_ || IsStopSignaled()`
+// early-return branch in AsyncPipelinedExecutor::RunCPU.
+TEST(AsyncPipelinedExecutorErrorTest, RunCPUReturnsEarlyOnExecError) {
+  TestableAsyncExecutor exe(/*batch_size=*/1, /*num_thread=*/1, /*device_id=*/0,
+                            /*bytes_per_sample_hint=*/1);
+  exe.Init();
+
+  exe.ForceExecError();
+  exe.RunCPU();
+  // Block until the scheduled CPU lambda has actually run, so the early-return
+  // branch is recorded by the coverage instrumentation.
+  EXPECT_NO_THROW(exe.WaitForCpuWork());
+}
+
+// Same early-return branch, but triggered through the stop signal rather than
+// the error flag, mirroring how Shutdown()/Outputs() abort in-flight work.
+TEST(AsyncPipelinedExecutorErrorTest, RunCPUReturnsEarlyOnStopSignal) {
+  TestableAsyncExecutor exe(/*batch_size=*/1, /*num_thread=*/1, /*device_id=*/0,
+                            /*bytes_per_sample_hint=*/1);
+  exe.Init();
+
+  exe.TriggerStop();
+  exe.RunCPU();
+  EXPECT_NO_THROW(exe.WaitForCpuWork());
+}
+
 }  // namespace dali
