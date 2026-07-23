@@ -14,6 +14,9 @@
 
 #include "dali/pipeline/executor/executor2/exec2_test.h"
 #include "dali/pipeline/executor/executor2/exec2.h"
+#include <optional>
+#include <stdexcept>
+#include "dali/pipeline/operator/checkpointing/checkpoint.h"
 
 namespace std {
 template <typename T>
@@ -166,6 +169,90 @@ std::vector<Executor2::Config> configs = {
 };
 
 INSTANTIATE_TEST_SUITE_P(Exec2Test, Exec2Test, testing::ValuesIn(configs));
+
+
+// ===== Error-path / API coverage tests for exec2.cc =====
+//
+// These drive the public Executor2 API into its guarded error and edge-case
+// branches, which the happy-path parametrized tests above never reach.
+
+namespace {
+
+Executor2::Config MakeErrCfg() {
+  return MakeCfg(QueueDepthPolicy::OutputOnly, OperatorConcurrency::None, StreamPolicy::Single);
+}
+
+}  // namespace
+
+// Building an executor twice must fail - the state can only advance from New.
+TEST(Exec2ErrorTest, BuildTwiceThrows) {
+  Executor2 exec(MakeErrCfg());
+  auto graph = GetTestGraph1();
+  exec.Build(graph);
+  auto graph2 = GetTestGraph1();
+  EXPECT_THROW(exec.Build(graph2), std::logic_error);
+}
+
+// Running before the executor is built/started must fail.
+TEST(Exec2ErrorTest, RunBeforeBuildThrows) {
+  Executor2 exec(MakeErrCfg());
+  EXPECT_THROW(exec.Run(), std::runtime_error);
+}
+
+// Requesting outputs when none are pending must fail.
+TEST(Exec2ErrorTest, OutputsWithoutRunThrows) {
+  Executor2 exec(MakeErrCfg());
+  auto graph = GetTestGraph1();
+  exec.Build(graph);
+  Workspace ws;
+  EXPECT_THROW(exec.Outputs(&ws), std::out_of_range);
+}
+
+// A graph with GPU/mixed nodes requires a device id in the config.
+TEST(Exec2ErrorTest, GpuGraphWithoutDeviceThrows) {
+  auto cfg = MakeErrCfg();
+  cfg.device = std::nullopt;
+  Executor2 exec(cfg);
+  auto graph = GetTestGraph2();  // contains mixed + gpu nodes
+  EXPECT_THROW(exec.Build(graph), std::invalid_argument);
+}
+
+// GetExecutorMeta is intentionally unsupported and returns an empty map.
+TEST(Exec2ErrorTest, GetExecutorMetaEmpty) {
+  Executor2 exec(MakeErrCfg());
+  EXPECT_TRUE(exec.GetExecutorMeta().empty());
+}
+
+// GetCurrentCheckpoint before any iteration data exists must fail.
+TEST(Exec2ErrorTest, GetCheckpointBeforeBuildThrows) {
+  Executor2 exec(MakeErrCfg());
+  EXPECT_THROW(exec.GetCurrentCheckpoint(), std::runtime_error);
+}
+
+// GetCurrentCheckpoint after building without checkpointing enabled must fail.
+TEST(Exec2ErrorTest, GetCheckpointWithoutCheckpointingThrows) {
+  Executor2 exec(MakeErrCfg());
+  auto graph = GetTestGraph1();
+  exec.Build(graph);
+  EXPECT_THROW(exec.GetCurrentCheckpoint(), std::runtime_error);
+}
+
+// Restoring from a checkpoint that has more operator states than the graph must fail.
+TEST(Exec2ErrorTest, RestoreCheckpointSuperfluousThrows) {
+  Executor2 exec(MakeErrCfg());
+  Checkpoint cpt;
+  cpt.AddOperator("ghost_op");  // one op, but the (unbuilt) graph has none
+  EXPECT_THROW(exec.RestoreStateFromCheckpoint(cpt), std::runtime_error);
+}
+
+// Restoring an empty checkpoint on a fresh executor must succeed and initialize
+// the iteration data (the !last_iter_data_ branch of RestoreFromCheckpoint).
+TEST(Exec2ErrorTest, RestoreEmptyCheckpointInitsIterData) {
+  Executor2 exec(MakeErrCfg());
+  Checkpoint cpt;
+  cpt.SetIterationId(7);
+  EXPECT_NO_THROW(exec.RestoreStateFromCheckpoint(cpt));
+}
 
 
 }  // namespace test
