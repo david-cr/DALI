@@ -2101,6 +2101,37 @@ TEST_F(TensorListVariableBatchSizeTest, UpdatePropertiesFromSamples) {
     tl.tensor_handle(1).Resize({5, 6}, DALI_FLOAT);
     EXPECT_THROW(tl.UpdatePropertiesFromSamples(false), std::runtime_error);
   }
+
+  // Order mismatch error path (order() is validated before device_id()). Give the
+  // second sample a distinct device access order without synchronizing.
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(0).set_pinned(false);
+    tl.tensor_handle(0).Resize({3, 4}, DALI_FLOAT);
+    tl.tensor_handle(1).set_pinned(false);
+    tl.tensor_handle(1).Resize({3, 4}, DALI_FLOAT);
+    tl.tensor_handle(1).set_order(AccessOrder(cuda_stream), false);
+    EXPECT_THROW(tl.UpdatePropertiesFromSamples(false), std::runtime_error);
+  }
+
+  // contiguous=true, but the separately-allocated samples are not actually laid
+  // out contiguously: the internal "is really contiguous" self-check must fail.
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(0).Resize({3}, DALI_FLOAT);
+    tl.tensor_handle(1).Resize({3}, DALI_FLOAT);
+    EXPECT_THROW(tl.UpdatePropertiesFromSamples(true), std::runtime_error);
+  }
+
+  // A leading empty sample (zero volume) must be skipped when picking the
+  // reference metadata; the empty sample keeps a matching dimensionality so the
+  // consistency checks still pass.
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(0).Resize({0, 4}, DALI_FLOAT);  // empty (volume 0), dim 2
+    tl.tensor_handle(1).Resize({3, 4}, DALI_FLOAT);  // non-empty reference, dim 2
+    EXPECT_NO_THROW(tl.UpdatePropertiesFromSamples(false));
+  }
 }
 
 TEST(TensorList, ResizeOverheadPerf) {
@@ -2517,6 +2548,48 @@ TEST(TensorListCoverage, ChunksNbytesCapacityNoncontiguous) {
   ASSERT_EQ(caps.size(), 2u);
   EXPECT_GE(caps[0], 6 * sizeof(float));
   EXPECT_GE(caps[1], 20 * sizeof(float));
+}
+
+// Test _chunks_nbytes and _chunks_capacity for a contiguous TL: both return a
+// single chunk describing the whole contiguous buffer (IsContiguous() branch).
+TEST(TensorListCoverage, ChunksNbytesCapacityContiguous) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Contiguous);
+  tl.Resize(TensorListShape<>{{2, 3}, {4, 5}}, DALI_FLOAT);
+  ASSERT_TRUE(tl.IsContiguous());
+
+  auto nbytes = tl._chunks_nbytes();
+  ASSERT_EQ(nbytes.size(), 1u);
+  EXPECT_EQ(nbytes[0], tl.nbytes());
+
+  auto caps = tl._chunks_capacity();
+  ASSERT_EQ(caps.size(), 1u);
+  EXPECT_GE(caps[0], nbytes[0]);
+}
+
+// ShareData with itself is an identity operation and must return early without
+// resetting or altering the batch.
+TEST(TensorListCoverage, ShareDataSelfAssignment) {
+  TensorList<CPUBackend> tl;
+  tl.Resize(uniform_list_shape(2, {3, 3}), DALI_FLOAT);
+  const void *p0 = tl.raw_tensor(0);
+  const void *p1 = tl.raw_tensor(1);
+
+  tl.ShareData(tl);
+
+  EXPECT_EQ(tl.num_samples(), 2);
+  EXPECT_EQ(tl.raw_tensor(0), p0);
+  EXPECT_EQ(tl.raw_tensor(1), p1);
+}
+
+// MakeContiguous on a non-contiguous batch is not implemented and must fail
+// rather than silently produce a wrong result.
+TEST(TensorListCoverage, MakeContiguousNoncontiguousFails) {
+  TensorList<CPUBackend> tl;
+  tl.SetContiguity(BatchContiguity::Noncontiguous);
+  tl.Resize(uniform_list_shape(2, {3, 3}), DALI_FLOAT);
+  ASSERT_FALSE(tl.IsContiguous());
+  EXPECT_THROW(tl.MakeContiguous(), std::runtime_error);
 }
 
 
