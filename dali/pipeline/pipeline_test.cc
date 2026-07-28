@@ -5253,4 +5253,158 @@ TEST_F(PipelineTestOnce, TestRepeatLastPrefetchHostOrder) {
   EXPECT_NO_THROW(pipe.Outputs(&ws2));
 }
 
+// ===== Output descriptor validation and input-operator accessors =====
+
+namespace {
+
+// Builds a single-output pipeline fed by an external source, with the pipeline
+// output described by `desc`. The data pushed to the source is a batch of 1-D
+// float samples with no layout, so a `desc` that disagrees with any of those
+// properties makes Outputs() fail the output validation.
+void RunWithOutputDesc(const PipelineOutputDesc &desc, Workspace *ws) {
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+
+  std::vector<PipelineOutputDesc> descs = {desc};
+  pipe.Build(descs);
+
+  TensorList<CPUBackend> data;
+  data.set_pinned(false);
+  data.Resize(uniform_list_shape(1, {4}), DALI_FLOAT);
+  pipe.SetExternalInput("data", data, AccessOrder::host());
+
+  pipe.Run();
+  pipe.Outputs(ws);
+}
+
+}  // namespace
+
+// A pipeline constructed with num_threads == -1 leaves the thread count unset.
+// Build() needs it to instantiate the executor, so it must be rejected there.
+TEST_F(PipelineTestOnce, TestNumThreadsNotSet) {
+  Pipeline pipe(1, -1, 0);
+  pipe.AddExternalInput("data");
+  EXPECT_THROW(pipe.Build({{"data", "cpu"}}), std::invalid_argument);
+}
+
+// The declared number of dimensions must match the produced output.
+TEST_F(PipelineTestOnce, TestOutputDescNdimMismatch) {
+  Workspace ws;
+  // The data is 1-D, but 3 dimensions are declared.
+  PipelineOutputDesc desc("data", "cpu", DALI_NO_TYPE, 3, "");
+  EXPECT_THROW(RunWithOutputDesc(desc, &ws), std::runtime_error);
+}
+
+// The declared data type must match the produced output.
+TEST_F(PipelineTestOnce, TestOutputDescDtypeMismatch) {
+  Workspace ws;
+  // The data is float, but int32 is declared. ndim is left unconstrained so that
+  // the dimensionality check passes and the type check is the one that fires.
+  PipelineOutputDesc desc("data", "cpu", DALI_INT32, -1, "");
+  EXPECT_THROW(RunWithOutputDesc(desc, &ws), std::runtime_error);
+}
+
+// The declared layout must match the produced output.
+TEST_F(PipelineTestOnce, TestOutputDescLayoutMismatch) {
+  Workspace ws;
+  // The data carries no layout, but "HWC" is declared. Type and dimensionality
+  // are left unconstrained so that the layout check is the one that fires.
+  PipelineOutputDesc desc("data", "cpu", DALI_NO_TYPE, -1, "HWC");
+  EXPECT_THROW(RunWithOutputDesc(desc, &ws), std::runtime_error);
+}
+
+// A matching descriptor must pass the very same validation.
+TEST_F(PipelineTestOnce, TestOutputDescMatches) {
+  Workspace ws;
+  PipelineOutputDesc desc("data", "cpu", DALI_FLOAT, 1, "");
+  EXPECT_NO_THROW(RunWithOutputDesc(desc, &ws));
+  EXPECT_EQ(ws.NumOutput(), 1);
+}
+
+// The input accessors only work for input operators; asking for a regular
+// operator must fail rather than report bogus values.
+TEST_F(PipelineTestOnce, TestInputAccessorsOnNonInputOperator) {
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+  pipe.AddOperator(OpSpec("Copy")
+                       .AddArg("device", "cpu")
+                       .AddInput("data", StorageDevice::CPU)
+                       .AddOutput("copy_out", StorageDevice::CPU),
+                   "copy_op");
+  pipe.Build({{"copy_out", "cpu"}});
+
+  // GetInputNdim/GetInputDtype dereference the operator node, so make sure the
+  // instance survived the graph optimization before querying it.
+  ASSERT_NE(pipe.GetOperatorNode("copy_op"), nullptr);
+
+  EXPECT_THROW(pipe.GetInputLayout("copy_op"), std::runtime_error);
+  EXPECT_THROW(pipe.GetInputNdim("copy_op"), std::runtime_error);
+  EXPECT_THROW(pipe.GetInputDtype("copy_op"), std::runtime_error);
+}
+
+// GetInputLayout looks the operator up by name only, so an unknown name must be
+// reported as a missing input operator.
+TEST_F(PipelineTestOnce, TestGetInputLayoutUnknownName) {
+  Pipeline pipe(1, 1, 0);
+  pipe.AddExternalInput("data");
+  pipe.Build({{"data", "cpu"}});
+
+  EXPECT_THROW(pipe.GetInputLayout("no_such_operator"), std::runtime_error);
+}
+
+// DALI itself has no mixed-backend input operator - ExternalSource is registered
+// for CPU and GPU only - but the pipeline's input accessors and Shutdown() each
+// have a dedicated mixed branch. This operator exists to exercise them.
+class DummyMixedInputOperator : public InputOperator<MixedBackend> {
+ public:
+  explicit DummyMixedInputOperator(const OpSpec &spec) : InputOperator<MixedBackend>(spec) {}
+
+  bool SetupImpl(std::vector<OutputDesc> &output_desc, const Workspace &ws) override {
+    return false;
+  }
+
+  void RunImpl(Workspace &ws) override {}
+
+  const TensorLayout &in_layout() const override {
+    return in_layout_;
+  }
+
+  int in_ndim() const override {
+    return 2;
+  }
+
+  DALIDataType in_dtype() const override {
+    return DALIDataType::DALI_UINT8;
+  }
+
+  TensorLayout in_layout_{"HW"};
+};
+
+DALI_REGISTER_OPERATOR(DummyMixedInputOperator, DummyMixedInputOperator, Mixed);
+
+DALI_SCHEMA(DummyMixedInputOperator)
+  .DocStr("DummyMixedInputOperator")
+  .NumInput(0)
+  .NumOutput(1);
+
+// The input accessors dispatch on the operator's backend; check the mixed one.
+TEST_F(PipelineTestOnce, TestInputAccessorsMixedBackend) {
+  Pipeline pipe(1, 1, 0);
+  pipe.AddOperator(OpSpec("DummyMixedInputOperator")
+                       .AddArg("device", "mixed")
+                       .AddArg("blocking", true)
+                       .AddArg("no_copy", false)
+                       .AddOutput("mixed_out", StorageDevice::GPU),
+                   "mixed_input");
+  pipe.Build({{"mixed_out", "gpu"}});
+
+  const auto *node = pipe.GetOperatorNode("mixed_input");
+  ASSERT_NE(node, nullptr);
+  ASSERT_EQ(node->op_type, OpType::MIXED);
+
+  EXPECT_EQ(pipe.GetInputLayout("mixed_input"), "HW");
+  EXPECT_EQ(pipe.GetInputNdim("mixed_input"), 2);
+  EXPECT_EQ(pipe.GetInputDtype("mixed_input"), DALI_UINT8);
+}
+
 }  // namespace dali
