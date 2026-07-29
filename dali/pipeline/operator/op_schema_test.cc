@@ -828,4 +828,185 @@ TEST(OpSchemaTest, ImplicitScopeAttrSchema) {
   // which is expected for a pure schema definition file
 }
 
+// ===== Schema definition errors and rarely used accessors =====
+//
+// These use locally constructed schemas rather than DALI_SCHEMA. Several of the
+// cases below are invalid schema definitions that throw, which would abort
+// static initialization if they were registered globally; keeping the schemas
+// local also avoids polluting the process-wide registry.
+
+// The internal random state argument is a tensor argument, and is only present
+// when it was explicitly requested.
+TEST(OpSchemaTest, HasRandomStateArg) {
+  OpSchema plain("CoverageNoRandomState");
+  EXPECT_FALSE(plain.HasRandomStateArg());
+
+  OpSchema with_state("CoverageWithRandomState");
+  with_state.AddRandomStateArg();
+  EXPECT_TRUE(with_state.HasRandomStateArg());
+}
+
+// An argument can only be deprecated once.
+TEST(OpSchemaTest, DeprecateArgTwiceThrows) {
+  OpSchema schema("CoverageDeprecateTwice");
+  schema.AddOptionalArg("foo", "foo", 1);
+  schema.DeprecateArg("foo", "1.0");
+  EXPECT_THROW(schema.DeprecateArg("foo", "2.0"), std::logic_error);
+}
+
+// In-place operator support was never implemented, so declaring it is an error.
+TEST(OpSchemaTest, InPlaceFnNotImplemented) {
+  OpSchema schema("CoverageInPlace");
+  EXPECT_THROW(schema.InPlaceFn([](const OpSpec &) { return 0; }), std::runtime_error);
+}
+
+// Pass through must be a 1-1 mapping - two inputs cannot share one output.
+TEST(OpSchemaTest, PassThroughDuplicateOutputThrows) {
+  OpSchema schema("CoveragePassThroughDup");
+  EXPECT_THROW(schema.PassThrough({{0, 0}, {1, 0}}), std::logic_error);
+}
+
+// Strict and samplewise pass through are mutually exclusive, in either order.
+TEST(OpSchemaTest, PassThroughModesCannotMix) {
+  OpSchema samplewise_first("CoverageMixSamplewiseFirst");
+  samplewise_first.SamplewisePassThrough();
+  EXPECT_THROW(samplewise_first.PassThrough({{0, 0}}), std::logic_error);
+
+  OpSchema strict_first("CoverageMixStrictFirst");
+  strict_first.PassThrough({{0, 0}});
+  EXPECT_THROW(strict_first.SamplewisePassThrough(), std::logic_error);
+}
+
+// An input with no pass-through mapping does not pass through.
+TEST(OpSchemaTest, IsPassThroughUnmappedInput) {
+  OpSchema schema("CoveragePassThroughLookup");
+  schema.PassThrough({{0, 0}});
+  EXPECT_TRUE(schema.IsPassThrough(0, 0));
+  EXPECT_FALSE(schema.IsPassThrough(1, 0));  // input 1 has no mapping
+  EXPECT_FALSE(schema.IsPassThrough(0, 1));  // input 0 maps to output 0, not 1
+}
+
+// All of the input documentation accessors require InputDox to have been used.
+TEST(OpSchemaTest, InputDoxAccessorsRequireDox) {
+  OpSchema schema("CoverageNoInputDox");
+  schema.NumInput(1).NumOutput(1);
+  ASSERT_FALSE(schema.HasInputDox());
+
+  EXPECT_THROW(schema.GetCallSignatureInputs(), std::logic_error);
+  EXPECT_THROW(schema.GetInputName(0), std::logic_error);
+  EXPECT_THROW(schema.GetInputType(0), std::logic_error);
+  EXPECT_THROW(schema.GetInputDox(0), std::logic_error);
+}
+
+// Inputs past the required ones are reported as defaulting to None in the call
+// signature, which exercises the optional-input part of the signature builder.
+TEST(OpSchemaTest, CallSignatureWithOptionalInputs) {
+  OpSchema schema("CoverageOptionalInputs");
+  schema.NumInput(1, 2)
+        .NumOutput(1)
+        .InputDox(0, "first", "TensorList", "the required input")
+        .InputDox(1, "second", "TensorList", "the optional input");
+
+  ASSERT_TRUE(schema.HasInputDox());
+  EXPECT_EQ(schema.GetCallSignatureInputs(), "first, second = None");
+  EXPECT_EQ(schema.GetInputName(1), "second");
+  EXPECT_EQ(schema.GetInputType(1), "TensorList");
+  EXPECT_EQ(schema.GetInputDox(1), "the optional input");
+}
+
+// With more than one optional input, consecutive optional entries are separated
+// in the signature as well.
+TEST(OpSchemaTest, CallSignatureWithMultipleOptionalInputs) {
+  OpSchema schema("CoverageManyOptionalInputs");
+  schema.NumInput(1, 3)
+        .NumOutput(1)
+        .InputDox(0, "first", "TensorList", "the required input")
+        .InputDox(1, "second", "TensorList", "an optional input")
+        .InputDox(2, "third", "TensorList", "another optional input");
+
+  EXPECT_EQ(schema.GetCallSignatureInputs(), "first, second = None, third = None");
+}
+
+// Once input documentation is used, every input must be documented - a gap is
+// reported rather than silently yielding an empty name.
+TEST(OpSchemaTest, GetInputNameUndocumentedInput) {
+  OpSchema schema("CoveragePartialInputDox");
+  schema.NumInput(1, 2)
+        .NumOutput(1)
+        .InputDox(0, "first", "TensorList", "the only documented input");
+
+  ASSERT_TRUE(schema.HasInputDox());
+  EXPECT_EQ(schema.GetInputName(0), "first");
+  EXPECT_THROW(schema.GetInputName(1), std::logic_error);
+}
+
+// A deprecated schema reports the version it was deprecated in; a regular one
+// has no such version.
+TEST(OpSchemaTest, DeprecatedInVersion) {
+  OpSchema plain("CoverageNotDeprecated");
+  EXPECT_TRUE(plain.DeprecatedInVersion().empty());
+
+  OpSchema deprecated("CoverageDeprecatedSchema");
+  deprecated.Deprecate("1.2.3");
+  EXPECT_EQ(deprecated.DeprecatedInVersion(), "1.2.3");
+}
+
+// Deprecation details can only be queried for a deprecated argument.
+TEST(OpSchemaTest, DeprecatedArgInfoMissingThrows) {
+  OpSchema schema("CoverageNoArgDeprecation");
+  schema.AddOptionalArg("foo", "foo", 1);
+  ASSERT_FALSE(schema.IsDeprecatedArg("foo"));
+  EXPECT_THROW(schema.DeprecatedArgInfo("foo"), std::invalid_argument);
+}
+
+// An explicitly supplied message replaces the generated one when an argument is
+// deprecated in favor of another.
+TEST(OpSchemaTest, DeprecateArgInFavorOfCustomMessage) {
+  OpSchema schema("CoverageDeprecateRenameMsg");
+  schema.AddOptionalArg("new_name", "the new argument", 1);
+  schema.DeprecateArgInFavorOf("old_name", "new_name", "1.0", "use new_name instead");
+
+  ASSERT_TRUE(schema.IsDeprecatedArg("old_name"));
+  const auto &info = schema.DeprecatedArgInfo("old_name");
+  EXPECT_EQ(info.msg, "use new_name instead");
+  EXPECT_EQ(info.renamed_to, "new_name");
+}
+
+// A required argument is not an optional one.
+TEST(OpSchemaTest, HasOptionalArgumentRequiredArg) {
+  OpSchema schema("CoverageRequiredArg");
+  schema.AddArg("req", "a required argument", DALI_INT32);
+  EXPECT_FALSE(schema.HasOptionalArgument("req"));
+}
+
+// An argument declared without a default value has no default to report...
+TEST(OpSchemaTest, DefaultValueStringNoDefaultThrows) {
+  auto &schema = SchemaRegistry::GetSchema("Dummy3");
+  ASSERT_FALSE(schema.HasArgumentDefaultValue("no_default"));
+  EXPECT_THROW(schema.GetArgumentDefaultValueString("no_default"), std::invalid_argument);
+}
+
+// ...while non-string defaults are reported verbatim, without python quoting.
+TEST(OpSchemaTest, DefaultValueStringNumeric) {
+  OpSchema schema("CoverageNumericDefault");
+  schema.AddOptionalArg("num", "a numeric argument", 7);
+  EXPECT_EQ(schema.GetArgumentDefaultValueString("num"), "7");
+}
+
+DALI_SCHEMA(CoverageStatelessParent)
+  .NumInput(0)
+  .NumOutput(1);
+
+DALI_SCHEMA(CoverageStatelessChild)
+  .NumInput(0)
+  .NumOutput(1)
+  .AddParent("CoverageStatelessParent");
+
+// Statefulness is inherited from the parents; a schema whose parents are all
+// stateless is itself stateless.
+TEST(OpSchemaTest, IsStatefulWithStatelessParent) {
+  auto &schema = SchemaRegistry::GetSchema("CoverageStatelessChild");
+  EXPECT_FALSE(schema.IsStateful());
+}
+
 }  // namespace dali
