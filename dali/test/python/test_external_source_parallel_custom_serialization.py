@@ -317,8 +317,9 @@ def _create_and_compare_simple_pipelines(
         _run_and_compare_outputs(batch_size, parallel_pipeline, serial_pipeline)
 
 
-# It uses fork method to start so need to be run as the first test
-def test_no_pickling_in_forking_mode():
+# Make it private and run it explicitly as it uses fork method to start
+# so need to be run as the first test
+def _test_no_pickling_in_forking_mode():
     # modify callback name so that an attempt to pickle it in spawn mode would fail
     _simple_callback.__name__ = _simple_callback.__qualname__ = "simple_callback"
     _create_and_compare_simple_pipelines(
@@ -346,7 +347,13 @@ def test_if_custom_type_reducers_are_respected_by_dali_reducer():
 
 
 @register_case(tests_dali_pickling)
-@raises(PicklingError, "Can't pickle * attribute lookup simple_callback on * failed")
+@raises(
+    PicklingError,
+    regex=(
+        r"Can't pickle .*simple_callback.*"
+        r"(attribute lookup simple_callback on .* failed|not found as .*\.simple_callback)"
+    ),
+)
 def _test_global_function_pickled_by_reference(name, py_callback_pickler):
     # modify callback name so that an attempt to pickle by reference,
     # which is default Python behavior, fails

@@ -175,6 +175,29 @@ class _ValidateSizeDescriptor(_ArgumentValidateRule):
         _ValidateIfPositive.verify(values=size, name="size")
 
 
+class _ValidateIfZeroOneRange(_ArgumentValidateRule):
+    """
+    Verify if the given value is in [0.0; 1.0] range and is an integer or a float
+
+    Parameters
+    ----------
+    p : any
+        Value to validate. Should be an integer or a float in the range of [0.0, 1.0].
+    """
+
+    @classmethod
+    def verify(cls, *, p, **_) -> None:
+        if isinstance(p, (int, float)):
+            if float(p) < 0.0 or float(p) > 1.0:
+                raise ValueError(
+                    f"p should be a floating point value in the interval [0.0, 1.0]. Got: {p}"
+                )
+        else:
+            raise ValueError(
+                f"p should be a floating point value in the interval [0.0, 1.0]. Got: {p!r}"
+            )
+
+
 class Operator(ABC):
     """
     Abstract base class for operator specification
@@ -219,7 +242,19 @@ class Operator(ABC):
         pass
 
     def __call__(self, data_input):
+        """
+        Torchvision creates callable objects, but DALI Torchvision needs to implement a pipeline.
+        The pipeline is implemented in Compose class and uses _invoke to execute operators' logic.
+        """
+        raise RuntimeError(
+            f"Operator {self!r} is not directly callable. Use it only inside Compose pipeline."
+        )
 
+    def _invoke(self, data_input):
+        """
+        Private method is used to execute operator from a Compose pipeline
+        Note: Do not call directly
+        """
         type(self).verify_data(data_input)
 
         # Original input is transfered to GPU, before being preprocess_data.

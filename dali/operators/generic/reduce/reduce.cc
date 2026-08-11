@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2020-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 namespace dali {
 
 DALI_SCHEMA(ReduceBase)
+  .MakeAbstract()
   .AddOptionalArg<std::vector<int>>(
     "axes",
     R"code(Axis or axes along which reduction is performed.
@@ -39,14 +40,20 @@ layout `"FHWC"` is equivalent to specifying ``axes=[1,2]``. This argument cannot
   .AddOptionalArg(
     "keep_dims",
     "If True, maintains original input dimensions.",
-    false);
+    false)
+  .OutputNDim(0, std::nullopt)  // TODO(michalz): implement
+  .OutputLayout(0, std::nullopt)  // TODO(michalz): implement
+  .OutputDType(0, std::nullopt);  // TODO(michalz): implement
+
 
 DALI_SCHEMA(ReduceWithOutputType)
+  .MakeAbstract()
   .AddOptionalTypeArg("dtype",
     R"code(Output data type. This type is used to accumulate the result.)code")
   .AddParent("ReduceBase");
 
   DALI_SCHEMA(ReduceWithMeanInput)
+  .MakeAbstract()
   .AddOptionalArg("ddof",
     R"code(Delta Degrees of Freedom. Adjusts the divisor used in calculations, which is `N - ddof`.)code",
     0)

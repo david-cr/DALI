@@ -15,23 +15,19 @@
 import glob
 import math
 import numpy as np
-import nvidia.dali.backend
 import nvidia.dali.fn as fn
 import nvidia.dali.types as types
 import os
 import random
-import subprocess
-import sys
 import tempfile
 from nvidia.dali import pipeline_def
-from PIL import Image
 
 from nose2.tools import params
 from nose_utils import assert_raises, SkipTest
-from test_utils import check_output_pattern
 from test_utils import compare_pipelines
 from test_utils import get_dali_extra_path
 from test_utils import to_array
+from test_utils import get_nvjpeg_ver
 
 
 def get_img_files(data_path, subdir="*", ext=None):
@@ -194,10 +190,7 @@ def test_image_decoder_fused():
     ]:
         # before CUDA 11.4 HW decoder API doesn't support ROI so we get slightly different results
         # HW decoder + slice vs fused which in this case is executed by the hybrid backend
-        if (
-            test_fun == create_decoder_random_crop_pipeline
-            or nvidia.dali.backend.GetNvjpegVersion() < 11040
-        ):
+        if test_fun == create_decoder_random_crop_pipeline or get_nvjpeg_ver() < (11, 4, 0):
             # random_resized_crop can properly handle border as it has pixels that are cropped out,
             # while plain resize following image_decoder_random_crop cannot do that
             # and must duplicate the border pixels
@@ -280,8 +273,8 @@ def check_fancy_upsampling_body(batch_size, img_type, device):
 
 @params(1, 8)
 def test_fancy_upsampling(batch_size):
-    if nvidia.dali.backend.GetNvjpegVersion() < 12010:
-        raise SkipTest("nvJPEG doesn't support fancy upsampling in this version")
+    if get_nvjpeg_ver() < (12, 1, 0):
+        raise SkipTest("nvimgcodec/nvjpeg doesn't support fancy upsampling in this version")
 
     data_path = os.path.join(test_data_root, good_path, "jpeg")
     compare_pipelines(
@@ -300,26 +293,6 @@ def test_fancy_upsampling(batch_size):
         N_iterations=3,
         eps=1,
     )
-
-
-def test_image_decoder_memory_stats():
-    device = "mixed"
-    img_type = "jpeg"
-
-    def check(img_type, size, device, threads):
-        data_path = os.path.join(test_data_root, good_path, img_type)
-        # largest allocation should match our (in this case) memory padding settings
-        # (assuming no reallocation was needed here as the hint is big enough)
-        pattern = (
-            r"Device memory: \d+ allocations, largest = 16777216 bytes\n.*"
-            r"Host \(pinned|regular\) memory: \d+ allocations, largest = 8388608 bytes\n"
-        )
-        with check_output_pattern(pattern):
-            run_decode(img_type, data_path, size, device, threads, memory_stats=True)
-
-    for size in [1, 10]:
-        for threads in [1, random.choice([2, 3, 4])]:
-            yield check, img_type, size, device, threads
 
 
 batch_size_test = 16
@@ -497,65 +470,6 @@ def test_pinned_input_hw_decoder():
     p.run()
 
 
-def _run_decoder_with_max_image_size_limit(files, max_image_size, device):
-    code = r"""
-import os
-import sys
-# Set env before importing DALI so decoder ctor reads it
-os.environ["DALI_MAX_IMAGE_SIZE"] = sys.argv[2]
-import nvidia.dali.fn as fn
-import nvidia.dali.types as types
-from nvidia.dali import pipeline_def
-
-@pipeline_def(batch_size=1, device_id=0, num_threads=1)
-def pipe():
-    encoded, _ = fn.readers.file(files=[sys.argv[1]])
-    decoded = fn.decoders.image(encoded, device=sys.argv[3], output_type=types.RGB)
-    return decoded
-
-p = pipe()
-p.run()
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", code, files, str(max_image_size), device],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    return result.returncode, result.stdout, result.stderr
-
-
-@params("cpu", "mixed")
-def test_image_decoder_dali_max_image_size_rejected(device="cpu"):
-    height, width = 500, 500  # 250_000 pixels, volume (H*W*C) = 750_000
-    max_image_size = 100000  # smaller than 750_000 so decode is rejected
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        jpeg_path = os.path.join(tmpdir, "large.jpg")
-        img = Image.fromarray(np.random.randint(0, 255, (height, width, 3), dtype=np.uint8))
-        img.save(jpeg_path, format="JPEG")
-
-        ret, out, err = _run_decoder_with_max_image_size_limit(jpeg_path, max_image_size, device)
-        assert ret != 0, f"Expected pipeline to fail. stdout: {out!r} stderr: {err!r}"
-        assert f"DALI_MAX_IMAGE_SIZE ({max_image_size})" in (
-            out + err
-        ), f"Expected DALI_MAX_IMAGE_SIZE in output: {out!r} {err!r}"
-
-
-@params("cpu", "mixed")
-def test_image_decoder_dali_max_image_size_accept(device="cpu"):
-    height, width = 500, 500  # 250_000 pixels, volume (H*W*C) = 750_000
-    max_image_size = 7500010  # larger than 750_000 so decode is accepted
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        jpeg_path = os.path.join(tmpdir, "large.jpg")
-        img = Image.fromarray(np.random.randint(0, 255, (height, width, 3), dtype=np.uint8))
-        img.save(jpeg_path, format="JPEG")
-
-        ret, out, err = _run_decoder_with_max_image_size_limit(jpeg_path, max_image_size, device)
-        assert ret == 0, f"Expected pipeline to succeed. stdout: {out!r} stderr: {err!r}"
-
-
 def test_tiff_palette():
     normal = os.path.join(test_data_root, good_path, "tiff", "0/cat-300572_640.tiff")
     palette = os.path.join(test_data_root, good_path, "tiff", "0/cat-300572_640_palette.tiff")
@@ -591,3 +505,48 @@ def test_image_decoder_crafted_tiny_files():
 
         p = pipe()
         assert_raises(RuntimeError, p.run)
+
+
+# Regression test for the nvImageCodec ROI/orientation contract bug. For EXIF
+# orientations 5-8 (which swap width and height), pre-fix nvImageCodec rejected
+# output-coord ROIs whose extent exceeded the raw codestream's smaller dimension.
+# The workaround in image_decoder.h disables nvImageCodec's orientation pass,
+# translates the ROI to raw codestream coords, and applies orientation in
+# post-decode Convert. The non-symmetric absolute ROI here would surface any
+# axis or anchor mix-up in the translation as a content mismatch against a
+# slice of the full decode.
+@params(
+    "padlock-406986_640_rotate_90.jpg",
+    "padlock-406986_640_rotate_270.jpg",
+    "padlock-406986_640_mirror_horizontal_rotate_90.jpg",
+    "padlock-406986_640_mirror_horizontal_rotate_270.jpg",
+)
+def test_image_slice_on_exif_rotated(image_name):
+    image_path = os.path.join(test_data_root, "db", "imgcodec", "jpeg", "orientation", image_name)
+
+    @pipeline_def(batch_size=1, device_id=0, num_threads=1)
+    def pipe(device):
+        encoded, _ = fn.readers.file(files=[image_path])
+        decoded_full = fn.decoders.image(encoded, device=device, output_type=types.RGB)
+        # Non-symmetric absolute ROI in output coords. Small insets so the ROI fits
+        # in both H/W orderings of the (almost-square) padlock test images.
+        full_shape = decoded_full.shape()
+        anchor = fn.stack(
+            types.Constant(2, dtype=types.INT64), types.Constant(1, dtype=types.INT64)
+        )
+        size = fn.stack(full_shape[0] - 6, full_shape[1] - 4)
+        decoded = fn.decoders.image_slice(
+            encoded,
+            anchor,
+            size,
+            device=device,
+            output_type=types.RGB,
+            axes=[0, 1],
+        )
+        ref = fn.slice(decoded_full, anchor, size, axes=[0, 1])
+        return decoded, ref
+
+    for device in ("cpu", "mixed"):
+        p = pipe(device=device)
+        decoded_out, ref_out = p.run()
+        np.testing.assert_array_equal(to_array(decoded_out[0]), to_array(ref_out[0]))

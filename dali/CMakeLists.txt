@@ -1,4 +1,4 @@
-# Copyright (c) 2017-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -50,10 +50,6 @@ if (BUILD_DALI_PIPELINE)
 endif()
 
 if(BUILD_DALI_OPERATORS)
-  if(BUILD_NVJPEG)
-    add_subdirectory(nvjpeg)
-  endif()
-
   if(BUILD_NVIMAGECODEC)
     add_subdirectory(nvimgcodec)
   endif()
@@ -107,6 +103,9 @@ if (BUILD_DALI_PIPELINE AND BUILD_TEST)
 
   target_link_libraries(dali_test PUBLIC dali dali_core dali_kernels ${DALI_LIBS} gtest)
   target_link_libraries(dali_test PRIVATE dynlink_cuda ${CUDART_LIB})
+  if (DALI_OPENCV_TEST_EXTRA_LIBS)
+    target_link_libraries(dali_test PRIVATE ${DALI_OPENCV_TEST_EXTRA_LIBS})
+  endif()
   if (BUILD_NVML)
     target_link_libraries(dali_test PRIVATE dynlink_nvml)
   endif(BUILD_NVML)

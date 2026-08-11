@@ -20,8 +20,9 @@ import nvidia.dali as dali
 import nvidia.dali.fn as fn
 from nvidia.dali.types import DALIInterpType
 
-from torchvision.transforms import InterpolationMode
 import numpy as np
+
+from ._enums import InterpolationMode, _normalize_enum_like_interpolation_mode
 
 
 class _ValidateSize(_ArgumentValidateRule):
@@ -44,11 +45,17 @@ class _ValidateSize(_ArgumentValidateRule):
                  edge, i.e. size should be an int"
             )
 
-        if interpolation in Resize.not_supported_interpolation_modes:
-            raise NotImplementedError(f"Interpolation mode: {interpolation} is not supported")
+        if isinstance(size, int) and size <= 0:
+            raise ValueError(f"size must be positive, got {size}")
+        if isinstance(size, (tuple, list)):
+            if len(size) not in (1, 2):
+                raise ValueError(f"size sequence must have length 1 or 2, got {len(size)}")
+            if any(not isinstance(s, int) for s in size):
+                raise ValueError(f"size values must be integers, got {size}")
+            if any(s <= 0 for s in size):
+                raise ValueError(f"size values must be positive, got {size}")
 
-        if interpolation not in Resize.interpolation_modes.keys():
-            raise ValueError(f"Interpolation {type(interpolation)} is not supported")
+        Resize.validate_interpolation(interpolation)
 
 
 class Resize(Operator):
@@ -64,7 +71,8 @@ class Resize(Operator):
             to this. If size is an int, smaller edge of the image will be matched to this number.
             i.e, if height > width, then image will be rescaled to (size * height / width, size).
         interpolation : InterpolationMode or int
-            ``torchvision.transforms.InterpolationMode``. Default is InterpolationMode.BILINEAR.
+            ``nvidia.dali.experimental.torchvision.InterpolationMode``.
+            Default is InterpolationMode.BILINEAR.
             If input is Tensor, only ``InterpolationMode.NEAREST``,
             ``InterpolationMode.NEAREST_EXACT``, ``InterpolationMode.BILINEAR`` and
             ``InterpolationMode.BICUBIC`` are supported.
@@ -98,8 +106,39 @@ class Resize(Operator):
         InterpolationMode.HAMMING,
     ]
 
+    # Legacy PIL integer codes accepted by torchvision for back-compat
+    # (mirrors torchvision.transforms.functional._interpolation_modes_from_int).
+    int_to_interpolation_mode = {
+        0: InterpolationMode.NEAREST,
+        1: InterpolationMode.LANCZOS,
+        2: InterpolationMode.BILINEAR,
+        3: InterpolationMode.BICUBIC,
+        4: InterpolationMode.BOX,
+        5: InterpolationMode.HAMMING,
+    }
+
     arg_rules = [_ValidateSize]
     preprocess_data = get_HWC_from_layout_pipeline
+
+    @classmethod
+    def validate_interpolation(cls, interpolation) -> None:
+        interpolation = cls.normalize_interpolation(interpolation)
+        if interpolation in cls.not_supported_interpolation_modes:
+            raise NotImplementedError(f"Interpolation mode: {interpolation!r} is not supported")
+        if interpolation not in cls.interpolation_modes:
+            raise ValueError(f"Interpolation {interpolation!r} is not supported")
+
+    @classmethod
+    def normalize_interpolation(cls, interpolation):
+        if isinstance(interpolation, int):
+            try:
+                return cls.int_to_interpolation_mode[interpolation]
+            except KeyError:
+                raise ValueError(
+                    f"Interpolation int {interpolation} is not a valid PIL code; "
+                    f"expected one of {sorted(cls.int_to_interpolation_mode)}"
+                )
+        return _normalize_enum_like_interpolation_mode(interpolation)
 
     @classmethod
     def infer_effective_size(
@@ -228,6 +267,7 @@ class Resize(Operator):
         antialias: Optional[bool] = True,
         device: Literal["cpu", "gpu"] = "cpu",
     ):
+        interpolation = Resize.normalize_interpolation(interpolation)
 
         super().__init__(
             device=device,

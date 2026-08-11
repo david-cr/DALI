@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2017-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -98,7 +98,7 @@ This argument is mutually exclusive with `files`.)", nullptr)
 
 `stick_to_shard` and `random_shuffle` cannot be used when this argument is set to True.)",
       false)
-  .AddOptionalArg<int32_t>("shuffle_after_epoch_seed",
+  .AddOptionalArg<int64_t>("shuffle_after_epoch_seed",
       R"(Random seed for the dataset shuffling performed after each epoch.
 
 If not provided, a fixed default seed is used, which results in the same shuffling
@@ -136,6 +136,10 @@ list of sub-directories under `file_root`.
 This argument is ignored when file paths are taken from `file_list` or `files`.)", nullptr)
   .AddOptionalArg<bool>("case_sensitive_filter", R"(If set to True, the filter will be matched
 case-sensitively, otherwise case-insensitively.)", false)
+  .OutputDType(0, DALI_UINT8)
+  .OutputDType(1, DALI_INT32)
+  .OutputNDim(0, 1)
+  .OutputNDim(1, 1)
   .AddParent("LoaderBase");
 
 

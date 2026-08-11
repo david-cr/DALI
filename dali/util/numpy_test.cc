@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2020-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -186,6 +186,7 @@ TEST(NumpyLoaderTest, ParseHeaderError) {
     "random_string",
     "{descr:'<f4'}",
     "{'descr':'','fortran_order':False,'shape':(4,7),}",
+    "{'descr':'<f4\\",
     "{'descr':'<f4','fortran_order':false,'shape':(4,7),}",
     "{'descr':'<f4','fortran_order':false,'shape':(a, b, c),}",
     "{'descr':'<f4','fortran_order':False,'shape':[4,7],}"
@@ -2174,4 +2175,3 @@ TEST(NumpyCoverageTest, ParseODirectHeaderReadFailure) {
 
 }  // namespace numpy
 }  // namespace dali
-

@@ -1,4 +1,4 @@
-// Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,6 +26,9 @@
 #include "dali/operators/video/frames_decoder_cpu.h"
 #include "dali/operators/video/frames_decoder_gpu.h"
 #include "dali/operators/video/video_utils.h"
+#if NVML_ENABLED
+#include "dali/util/nvml.h"
+#endif
 
 #include "libavutil/rational.h"
 
@@ -733,8 +736,6 @@ The operator utilizes either libavcodec (FFmpeg) or NVIDIA Video Codec SDK (NVDE
 
 The following video codecs are supported by both CPU and GPU backends:
 
-* H.264/AVC
-* H.265/HEVC
 * VP8
 * VP9
 * MJPEG
@@ -743,6 +744,8 @@ The following codecs are supported by the GPU backend only:
 
 * AV1
 * MPEG-4
+* H.264/AVC
+* H.265/HEVC
 
 The outputs of the operator are: video, [labels], [frame_num], [timestamps].
 
@@ -865,7 +868,11 @@ Otherwise, the number of values must match the number of channels in the video.)
                     })
     .AddOptionalArg("image_type", R"(The color space of the output frames (RGB or YCbCr).)",
                     DALI_RGB)
-    .AddParent("LoaderBase");
+    .AddParent("LoaderBase")
+    .OutputNDim(0, 4)
+    .OutputDType(0, DALI_UINT8)
+    .OutputLayout(0, "FHWC");
+
 
 DALI_REGISTER_OPERATOR(experimental__readers__Video, VideoReaderDecoder<CPUBackend>, CPU);
 DALI_REGISTER_OPERATOR(experimental__readers__Video, VideoReaderDecoder<GPUBackend>, GPU);

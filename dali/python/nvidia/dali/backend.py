@@ -18,7 +18,6 @@ from nvidia.dali.backend_impl import (
     GetCudaVersion,
     GetCufftVersion,
     GetNppVersion,
-    GetNvjpegVersion,
 )
 
 # Re-expose some private symbols not imported with `import *`
@@ -91,9 +90,6 @@ if not initialized:
             "Please update your environment to use Python 3.10, "
             "or newer."
         )
-    # py3.14 warning
-    if sys.version_info[0] == 3 and sys.version_info[1] == 14:
-        deprecation_warning("Python 3.14 support is experimental and not officially tested.")
 
     if int(str(__cuda_version__)[:2]) < 11:
         deprecation_warning(
@@ -106,7 +102,7 @@ cuda_checked = False
 
 def check_cuda_runtime():
     """
-    Checks the availability of CUDA runtime/GPU, and NPP, nvJPEG, and cuFFT libraries and prints an
+    Checks the availability of CUDA runtime/GPU, and NPP, and cuFFT libraries and prints an
     appropriate warning.
     """
     global cuda_checked
@@ -130,17 +126,6 @@ def check_cuda_runtime():
             deprecation_warning(
                 "nvidia-dali-cuda120 is no longer shipped with CUDA runtime. "
                 "You need to install it separately. NPP is typically "
-                "provided with CUDA Toolkit installation or an appropriate wheel. "
-                "Please check "
-                "https://docs.nvidia.com/cuda/cuda-quick-start-guide/index.html"
-                "#pip-wheels-installation-linux "
-                "for the reference."
-            )
-
-        if GetNvjpegVersion() == -1:
-            deprecation_warning(
-                "nvidia-dali-cuda120 is no longer shipped with CUDA runtime. "
-                "You need to install it separately. nvJPEG is typically "
                 "provided with CUDA Toolkit installation or an appropriate wheel. "
                 "Please check "
                 "https://docs.nvidia.com/cuda/cuda-quick-start-guide/index.html"

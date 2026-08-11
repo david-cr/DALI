@@ -13,14 +13,16 @@
 # limitations under the License.
 
 import threading
+import types
 import weakref
 from typing import TYPE_CHECKING, Any, Optional
 
 from ._async import _Future
+from ._call_site import capture_stack_from_frame
 from ._device import Device
 from ._eval_context import EvalContext as _EvalContext
 from ._eval_mode import EvalMode as _EvalMode
-from ._exceptions import capture_stack, rethrow_exception
+from ._exceptions import rethrow_exception
 from ._nvtx import NVTXRange
 from ._type import DType
 from nvidia.dali import backend as _b
@@ -36,9 +38,6 @@ class Invocation:
     It binds the operator instance and the call arguments.
     It also tracks the order of invocations of stateful operators, which is important for
     lazy evaluation of stateful operators or operators with side-effects.
-
-    NOTE:  This class is not thread safe. Subsequent invocations of the same operator instance
-           must be synchronized by the caller.
     """
 
     def __init__(
@@ -50,7 +49,7 @@ class Invocation:
         is_batch: bool = False,
         batch_size: Optional[int] = None,
         previous_invocation: Optional["Invocation"] = None,
-        caller_depth: int | None = None,
+        caller_frame: types.FrameType | None = None,
     ):
         """
         Parameters
@@ -73,8 +72,8 @@ class Invocation:
             the batch size.
         previous_invocation : Invocation
             The previous invocation of the same operator. Used by stateful operators.
-        caller_depth : int
-            Depth of the initial caller. Used to capture the call stacks for error reporting.
+        caller_frame : FrameType
+            The resolved user call-site frame. Used to capture call stacks for error reporting.
         """
         self._operator = operator_instance
         self._call_id = call_id
@@ -90,8 +89,8 @@ class Invocation:
         self._eval_mode: _EvalMode | None = None
         self._future: Optional[_Future] = None
         self._run_lock = threading.Lock()
-        if caller_depth is not None and _EvalMode.current().value <= _EvalMode.eager.value:
-            self._call_stack = capture_stack(caller_depth + 1)
+        if caller_frame is not None and _EvalMode.current().value <= _EvalMode.eager.value:
+            self._call_stack = capture_stack_from_frame(caller_frame)
         else:
             self._call_stack = None
 
@@ -111,24 +110,12 @@ class Invocation:
             self._output_devices = self._operator._infer_output_devices(*self._inputs, **self._args)
         return self._output_devices[result_index]
 
-    def ndim(self, result_index: int) -> int:
-        if self._results is None:
-            # TODO(michalz): Try to get ndim without full evaluation.
-            self.run(self._eval_context)
-        return self._results[result_index].ndim()
-
     def shape(self, result_index: int):
         if self._results is None:
             # TODO(michalz): Try to get shape without full evaluation.
             self.run(self._eval_context)
         s = self._results[result_index].shape()
         return s if self.is_batch else tuple(s)
-
-    def dtype(self, result_index: int) -> DType:
-        if self._results is None:
-            # TODO(michalz): Try to get dtype without full evaluation.
-            self.run(self._eval_context)
-        return self._results[result_index].dtype
 
     @NVTXRange("Invocation.batch_size", category="invocation")
     def batch_size(self, result_index: int):
@@ -141,11 +128,43 @@ class Invocation:
             self.run(self._eval_context)
         return self._results[result_index].batch_size if self._is_batch else None
 
-    def layout(self, result_index: int):
+    def ndim(self, result_index: int) -> int:
         if self._results is None:
-            # TODO(michalz): Try to get layout without full evaluation.
+            ndim = self._try_get_metadata(result_index, 2)
+            if ndim is not None:
+                return ndim
             self.run(self._eval_context)
-        return self._results[result_index].layout()
+        return self._results[result_index].ndim()
+
+    def dtype(self, result_index: int) -> DType:
+        if self._results is None:
+            dtype = self._try_get_metadata(result_index, 3)
+            if dtype is not None:
+                return dtype
+            self.run(self._eval_context)
+        return self._results[result_index].dtype
+
+    def layout(self, result_index: int) -> str | None:
+        if self._results is None:
+            layout = self._try_get_metadata(result_index, 4)
+            if layout is not None:
+                layout = str(layout)
+                return None if layout == "" else layout
+            self.run(self._eval_context)
+
+        layout = self._results[result_index].layout()
+        return layout or None  # this will override "" with None
+
+    def _try_get_metadata(self, result_index: int, desc_index: int):
+        # Capture the operator first to guard from a race condition
+        operator = self._operator
+        if self._results is None:
+            assert operator is not None
+            if init_spec := getattr(operator, "_init_spec", None):
+                init_spec(self._inputs, self._args)
+                if output_desc := operator._op_spec.OutputDesc(result_index):
+                    return output_desc[desc_index]
+        return None
 
     def __iter__(self):
         for index in range(len(self)):
@@ -196,10 +215,13 @@ class Invocation:
             if stream is not None:  # If the stream is None, there's no GPU
                 stream.synchronize()
 
+    _nvtx_wait = NVTXRange("Invocation.wait", category="invocation")
+    _nvtx_run = NVTXRange("Invocation.run", category="invocation")
+
     def run(self, ctx: Optional[_EvalContext] = None):
         """Executes the operator immediately."""
         if future := self._future:
-            with NVTXRange("Invocation.wait", category="invocation"):
+            with Invocation._nvtx_wait:
                 future.wait()
             self._future = None
         else:
@@ -251,7 +273,7 @@ class Invocation:
         if self._results is not None:
             return
 
-        with NVTXRange("Invocation.run", category="invocation"):
+        with Invocation._nvtx_run:
             # If the invocation was created with a GPU device, validate that
             # the evaluation context matches.
             if (
@@ -298,7 +320,7 @@ class Invocation:
                 if isinstance(x, (_b.TensorGPU, _b.TensorListGPU)):
                     return Device("gpu", x.device_id())
                 else:
-                    return Device("cpu")
+                    return Device.CPU
 
             if self._output_devices is None:
                 self._output_devices = [output_device(r) for r in self._results]

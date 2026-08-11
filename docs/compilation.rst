@@ -37,10 +37,10 @@ Building Python Wheel
 Change directory (``cd``) into ``docker`` directory and run ``./build.sh``. If needed,
 set the following environment variables:
 
-* | CUDA_VERSION - CUDA toolkit version (12.9 and 13.2 are officially supported,
-    12.0, 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.8, 13.0 and 13.1 are deprecated
+* | CUDA_VERSION - CUDA toolkit version (12.9 and 13.3 are officially supported,
+    12.0, 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.8, 13.0, 13.1 and 13.2 are deprecated
     and may not work).
-  | The default is ``13.2``. Thanks to CUDA extended compatibility mode, CUDA 12.x wheels are named as
+  | The default is ``13.3``. Thanks to CUDA extended compatibility mode, CUDA 12.x wheels are named as
     CUDA 12.0 because it can work with the CUDA 12.0 R525.x driver
     family. Same applies to CUDA 13.x. Please update to the latest recommended driver version in that family.
   | If the value of the CUDA_VERSION is prefixed with `.` then any value ``.XX.Y`` can be passed,
@@ -328,9 +328,18 @@ Optional CMake Build Parameters
 -  ``BUILD_BENCHMARK`` - include building benchmarks (default: ON)
 -  ``BUILD_LMDB`` - build with support for LMDB (default: OFF)
 -  ``BUILD_NVTX`` - build with NVTX profiling enabled (default: OFF)
--  ``BUILD_NVJPEG`` - build with ``nvJPEG`` support (default: ON)
--  ``BUILD_NVJPEG2K`` - build with ``nvJPEG2k`` support (default: ON)
--  ``BUILD_LIBTIFF`` - build with ``libtiff`` support (default: ON)
+-  ``BUILD_NVJPEG`` - build the ``nvJPEG`` extension for ``nvImageCodec`` (default: ON, see note below)
+-  ``BUILD_NVJPEG2K`` - build the ``nvJPEG2k`` extension for ``nvImageCodec`` (default: ON, see note below)
+-  ``BUILD_LIBJPEG_TURBO`` - build the ``libjpeg-turbo`` extension for ``nvImageCodec`` (default: ON, see note below)
+-  ``BUILD_LIBTIFF`` - build the ``libtiff`` extension for ``nvImageCodec`` (default: ON, see note below)
+
+.. note::
+
+   ``BUILD_NVJPEG``, ``BUILD_NVJPEG2K``, ``BUILD_LIBJPEG_TURBO`` and ``BUILD_LIBTIFF`` only take effect
+   when ``nvImageCodec`` is statically linked (``WITH_DYNAMIC_NVIMGCODEC=OFF``); they select which
+   extensions are built into and registered with the bundled ``nvImageCodec``. With dynamic linking
+   (the default), ``nvImageCodec`` discovers and loads extensions at runtime from the installed
+   ``nvidia-nvimgcodec-cuXX`` package and these flags have no effect on the resulting DALI binary.
 -  ``BUILD_FFTS`` - build with ``ffts`` support (what includes GPU operator based on cuFFT) (default: ON)
 -  ``BUILD_CFITSIO`` - build with ``CFITSIO`` support (default: ON)
 -  ``BUILD_LIBSND`` - build with libsnd support (default: ON)
@@ -368,8 +377,6 @@ To run with sanitizers enabled issue:
   STDC_VERSION used by the system. Usually 6.
 
 -  ``DALI_BUILD_FLAVOR`` - Allow to specify custom name suffix (i.e. 'nightly') for nvidia-dali whl package
--  *(Unofficial)* ``BUILD_JPEG_TURBO`` - build with ``libjpeg-turbo`` (default: ON)
--  *(Unofficial)* ``BUILD_LIBTIFF`` - build with ``libtiff`` (default: ON)
 
 .. note::
 
@@ -381,7 +388,6 @@ To run with sanitizers enabled issue:
 Following CMake parameters could be helpful in setting the right paths:
 
 * FFMPEG_ROOT_DIR - path to installed FFmpeg
-* NVJPEG_ROOT_DIR - where nvJPEG can be found (from CUDA 10.0 it is shipped with the CUDA toolkit so this option is not needed there)
 * libjpeg-turbo options can be obtained from `**libjpeg CMake docs page** <https://cmake.org/cmake/help/v3.11/module/FindJPEG.html>`_
 * protobuf options can be obtained from `**protobuf CMake docs page** <https://cmake.org/cmake/help/v3.11/module/FindProtobuf.html>`_
 

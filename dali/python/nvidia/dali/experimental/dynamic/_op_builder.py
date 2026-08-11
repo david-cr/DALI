@@ -25,6 +25,9 @@ from nvidia.dali.ops import _docs, _names
 
 from . import _device, _invocation, _op_filter, _ops, _type
 from ._batch import Batch
+from ._call_site import mark_transparent, resolve_callsite_frame
+from ._compile import _compile_intercept
+from ._eval_mode import EvalMode
 from ._tensor import Tensor, tensor as to_tensor
 
 
@@ -90,20 +93,6 @@ def _get_module_name(module, legacy_op_class):
     if legacy_op_class is not None and legacy_op_class.__module__.endswith("hidden"):
         module_name += ".hidden"
     return module_name
-
-
-def _get_caller_depth(has_fn_wrapper: bool):
-    # By default, the call stack is as follows:
-    # - __call__ function
-    # - nvtx decorator
-    # - makefun-generated function
-    # - fn wrapper
-    # - nvtx decorator
-    # - makefun-generation function
-    # As a result we have to skip 6 frames.
-    # There are however exceptions such as reader called explicitly or manually created operators
-    # that don't rely on the fn wrapper. For such cases, we skip only 3 frames.
-    return 6 if has_fn_wrapper else 3
 
 
 def build_operator_class(schema):
@@ -197,6 +186,9 @@ def build_constructor(schema, op_class):
 
     if init_args:
         init_args = ["*"] + init_args
+    if is_reader:
+        init_args.append("enable_checkpointing=False")
+
     header_args = (
         [
             "self",
@@ -216,6 +208,7 @@ def build_constructor(schema, op_class):
             actual_tensor_arg_names = {
                 arg_name for arg_name in tensor_arg_names if kwargs.get(arg_name) is not None
             }
+            original_tensor_args = {}
             tensor_args = {}
             for arg_name in tensor_arg_names:
                 arg = kwargs.get(arg_name)
@@ -224,6 +217,7 @@ def build_constructor(schema, op_class):
                 del kwargs[arg_name]
                 if isinstance(arg, Batch):
                     raise ValueError("Readers cannot be constructed with batch keyword arguments")
+                original_tensor_args[arg_name] = arg
                 dtype = op_class._argument_conversion_map[arg_name]
                 tensor_args[arg_name] = to_tensor(arg, dtype=dtype)
         kwargs = {k: _scalar_decay(v) for k, v in kwargs.items()}
@@ -231,6 +225,7 @@ def build_constructor(schema, op_class):
         if is_reader:  # Need to be done here not to be overridden by the constructor
             self._tensor_arg_names = actual_tensor_arg_names
             self._raw_tensor_args = tensor_args
+            self._original_tensor_args = original_tensor_args
         if stateful:
             self._call_id = 0
 
@@ -263,6 +258,14 @@ def _get_inputs(schema):
     else:
         inputs.append("*")
     return inputs
+
+
+def _check_batch_size_available(op_class, batch_size):
+    if op_class._schema_name == "BatchPermutation" and batch_size is None:
+        raise ValueError(
+            "`batch_size` must be specified for dynamic `batch_permutation` "
+            "because it has no data inputs to infer the batch size from."
+        )
 
 
 def build_call_function(schema, op_class):
@@ -305,6 +308,10 @@ def build_call_function(schema, op_class):
 
     header = f"__call__({', '.join(['self'] + inputs + call_args + internal_args)})"
 
+    nvtx_arg_shallowcopy = NVTXRange("__call__: shallowcopy", category="op_builder")
+    nvtx_construct_invocation = NVTXRange("__call__: construct Invocation", category="op_builder")
+
+    @mark_transparent
     @NVTXRange(f"__call__: {op_class._op_name}", category="op_builder")
     def call(self, *raw_args, batch_size=None, _process_params=True, **raw_kwargs):
         self._pre_call(*raw_args, **raw_kwargs)
@@ -314,12 +321,13 @@ def build_call_function(schema, op_class):
             overlap = actual_kwargs & self._tensor_arg_names
             if overlap:
                 raise ValueError(
-                    f"Keyword argument{'s'[:len(overlap)^1]} {sorted(overlap)}"
+                    f"Keyword argument{'s'[:len(overlap) ^ 1]} {sorted(overlap)}"
                     f" cannot be passed both in the constructor and __call__."
                 )
             raw_kwargs = {**raw_kwargs, **self._raw_tensor_args}
 
-        batch_size = _ops._infer_batch_size(batch_size, *raw_args, **raw_kwargs)
+        if batch_size is None:
+            batch_size = _ops._infer_batch_size(*raw_args, **raw_kwargs)
         is_batch = batch_size is not None
 
         if _process_params:
@@ -330,7 +338,7 @@ def build_call_function(schema, op_class):
             inputs = [inp for inp in raw_args if inp is not None]
             kwargs = {name: value for name, value in raw_kwargs.items() if value is not None}
 
-        with NVTXRange("__call__: shallowcopy", category="op_builder"):
+        with nvtx_arg_shallowcopy:
             inputs = [copy.copy(x) for x in inputs]
             kwargs = {k: copy.copy(v) for k, v in kwargs.items()}
 
@@ -339,7 +347,10 @@ def build_call_function(schema, op_class):
             self._call_id += 1
         else:
             call_id = None
-        with NVTXRange("__call__: construct Invocation", category="op_builder"):
+        with nvtx_construct_invocation:
+            caller_frame = None
+            if EvalMode.current().value <= EvalMode.eager.value:
+                caller_frame = resolve_callsite_frame()
             invocation = _invocation.Invocation(
                 self,
                 call_id,
@@ -348,7 +359,7 @@ def build_call_function(schema, op_class):
                 is_batch=is_batch,
                 batch_size=batch_size or 1,
                 previous_invocation=self._last_invocation,
-                caller_depth=_get_caller_depth(not _process_params),
+                caller_frame=caller_frame,
             )
 
         if stateful:
@@ -372,13 +383,58 @@ def build_call_function(schema, op_class):
             }
 
     doc = _docs._docstring_generator_call(schema.Name(), api="dynamic", args=used_kwargs)
-    function = makefun.create_function(header, call, doc=doc)
+    function = mark_transparent(makefun.create_function(header, call, doc=doc))
 
     return function
 
 
 def _next_pow2(x):
     return 1 << (x - 1).bit_length()
+
+
+def _resolve_backend(
+    op_class, device, inputs, *, op_name: str | None = None
+) -> tuple[_device.Device, str]:
+    """Resolve device and backend from user arguments.
+
+    Returns (resolved_device, backend).
+    """
+    if device is None:
+
+        def infer_device():
+            for arg in inputs:
+                if arg is None:
+                    continue
+                dev = _ops._get_input_device(arg)
+                if dev is not None and dev.device_type == "gpu":
+                    return dev
+            return _device.Device.CPU
+
+        device = infer_device()
+        device_inferred = True
+    else:
+        if not isinstance(device, _device.Device):
+            device = _device.Device(device)
+        device_inferred = False
+
+    supported_backends = op_class._supported_backends
+    backend = device.device_type
+    if device.device_type not in supported_backends:
+        if len(supported_backends) == 1 and device_inferred:
+            # Maybe we got it wrong? Try the only device that's there
+            backend = next(iter(supported_backends))
+        # Now we want to call "mixed" operators "gpu" - but we still have distinct backends.
+        # Hardly any op has both "mixed" and "gpu", so we can just replace "gpu" with
+        # "mixed".
+        elif backend == "gpu" and "mixed" in supported_backends:
+            backend = "mixed"
+        elif not device_inferred:
+            name = op_name or op_class._schema.OperatorName()
+            raise ValueError(f'Invalid device "{device}" for operator `{name}`')
+        if device.device_type == "cpu" and backend in ["gpu", "mixed"]:
+            device = _device.Device("gpu")
+
+    return device, backend
 
 
 def build_fn_wrapper(op, fn_name=None, add_to_module=True):
@@ -405,8 +461,8 @@ def build_fn_wrapper(op, fn_name=None, add_to_module=True):
 
     fixed_args = []
     tensor_args = []
-    signature_args = ["batch_size=None, device=None"]
-    used_kwargs = set()
+    signature_args = ["batch_size=None", "device=None"]
+    used_kwargs = {"batch_size", "device"}
 
     for arg in op._schema.GetArgumentNames():
         if arg in _unsupported_args:
@@ -428,78 +484,41 @@ def build_fn_wrapper(op, fn_name=None, add_to_module=True):
         # Remove 'seed' from used_kwargs and signature_args if present
         if "seed" in used_kwargs:
             used_kwargs.remove("seed")
-        if "seed" in signature_args:
-            signature_args.remove("seed")
+        signature_args = [arg for arg in signature_args if "seed" not in arg]
 
     header = f"{fn_name}({', '.join(inputs + signature_args)})"
 
+    nvtx_get_instance_range = NVTXRange(f"get instance {op._op_name}", category="op_builder")
+
+    @mark_transparent
     @NVTXRange(f"{fn_name}()", category="op_builder")
-    def fn_call(*inputs, batch_size=None, device=None, **raw_kwargs):
-        batch_size = _ops._infer_batch_size(batch_size, *inputs, **raw_kwargs)
+    def fn_call(*inputs, batch_size=None, device=None, _backend=None, **raw_kwargs):
+        if batch_size is None:
+            batch_size = _ops._infer_batch_size(*inputs, **raw_kwargs)
+        _check_batch_size_available(op, batch_size)
         max_batch_size = _next_pow2(batch_size or 1)
         init_args = {
-            arg: _scalar_decay(raw_kwargs[arg])
-            for arg in fixed_args
-            if arg != "max_batch_size" and arg in raw_kwargs and raw_kwargs[arg] is not None
+            arg: _scalar_decay(value)
+            for arg, value in raw_kwargs.items()
+            if value is not None and arg != "max_batch_size" and arg in fixed_args
         }
         call_args = {
-            arg: _scalar_decay(raw_kwargs[arg])
-            for arg in tensor_args
-            if arg in raw_kwargs and raw_kwargs[arg] is not None
+            arg: _scalar_decay(value)
+            for arg, value in raw_kwargs.items()
+            if value is not None and arg in tensor_args
         }
 
-        # If device is not specified, infer it from the inputs and call_args
-        if device is None:
-
-            def _infer_device():
-                for inp in inputs:
-                    if inp is None:
-                        continue
-                    dev = _ops._get_input_device(inp)
-                    if dev is not None and dev.device_type == "gpu":
-                        return dev
-                for arg in raw_kwargs.values():
-                    if arg is None:
-                        continue
-                    dev = _ops._get_input_device(arg)
-                    if dev is not None and dev.device_type == "gpu":
-                        return dev
-                return _device.Device("cpu")
-
-            device = _infer_device()
-            device_inferred = True
-        elif not isinstance(device, _device.Device):
-            device = _device.Device(device)
-            device_inferred = False
-
-        supported_backends = op._supported_backends
-        backend = device.device_type
-        if device.device_type not in supported_backends:
-            if len(supported_backends) == 1 and device_inferred:
-                # Maybe we got it wrong? Try the only device that's there
-                backend = next(iter(supported_backends))
-            else:
-                # Now we want to call "mixed" operators "gpu" - but we still have distinct backends.
-                # Hardly any op has both "mixed" and "gpu", so we can just replace "gpu" with
-                # "mixed".
-                if backend == "gpu" and "mixed" in supported_backends:
-                    backend = "mixed"
-                elif not device_inferred:
-                    raise ValueError(f'Invalid device "{device}" for operator `{fn_name}`')
-            if device.device_type == "cpu" and backend in ["gpu", "mixed"]:
-                device = _device.Device("gpu")
-
-        inputs, call_args = op._process_params(backend, device, batch_size, *inputs, **call_args)
+        inputs, call_args = op._process_params(_backend, device, batch_size, *inputs, **call_args)
 
         # Get or create the operator instance that matches the arguments
-        with NVTXRange(f"get instance {op._op_name}", category="op_builder"):
+        with nvtx_get_instance_range:
             op_inst = op._get(
                 max_batch_size=max_batch_size,
                 name=None,
                 device=device,
                 num_inputs=len(inputs),
                 call_arg_names=tuple(call_args.keys()),
-                _backend=backend,
+                _backend=_backend,
                 inputs=inputs,
                 init_args=init_args,
                 call_args=call_args,
@@ -508,8 +527,10 @@ def build_fn_wrapper(op, fn_name=None, add_to_module=True):
         # Call the operator (the result is an Invocation object)
         return op_inst(*inputs, batch_size=batch_size, _process_params=False, **call_args)
 
+    fn_call = _compile_intercept(fn_call, op, op_name=fn_name)
+
     doc = _docs._docstring_generator_fn(schema.Name(), api="dynamic", args=used_kwargs)
-    function = makefun.create_function(header, fn_call, doc=doc)
+    function = mark_transparent(makefun.create_function(header, fn_call, doc=doc))
     function._op_class = op
     function._schema = schema
     function._schema_name = schema.Name()

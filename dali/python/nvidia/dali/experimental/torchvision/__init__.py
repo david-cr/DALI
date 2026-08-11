@@ -13,12 +13,15 @@
 # limitations under the License.
 
 from .v2.centercrop import CenterCrop
-from .v2.color import ColorJitter, Grayscale
+from .v2.color import ColorJitter, Grayscale, RandomGrayscale
 from .v2.compose import Compose
+from .v2._enums import InterpolationMode
 from .v2.flips import RandomHorizontalFlip, RandomVerticalFlip
 from .v2.gaussian_blur import GaussianBlur
 from .v2.normalize import Normalize
 from .v2.pad import Pad
+from .v2.rand_apply import RandomApply
+from .v2.randomcrop import RandomCrop, RandomResizedCrop
 from .v2.resize import Resize
 from .v2.totensor import ToPureTensor, PILToTensor, ToPILImage
 
@@ -28,10 +31,15 @@ __all__ = [
     "Compose",
     "GaussianBlur",
     "Grayscale",
+    "InterpolationMode",
     "Normalize",
     "Pad",
     "PILToTensor",
+    "RandomApply",
+    "RandomCrop",
+    "RandomGrayscale",
     "RandomHorizontalFlip",
+    "RandomResizedCrop",
     "RandomVerticalFlip",
     "Resize",
     "ToPILImage",

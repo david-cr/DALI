@@ -13,10 +13,9 @@
 # limitations under the License.
 
 
-from . import _op_builder
-from . import _invocation
-from . import _device
-from ._batch import as_batch, batch, Batch, Tensor
+from . import _device, _invocation, _op_builder
+from ._batch import Batch, Tensor, as_batch, batch
+from ._call_site import mark_transparent, resolve_callsite_frame
 from ._nvtx import NVTXRange
 
 
@@ -35,6 +34,9 @@ class BatchToTensor:
     Only a minimal required subset of ``Operator`` interface is implemented.
     """
 
+    _nvtx_construct_invocation = NVTXRange("__call__: construct Invocation", category="op_builder")
+
+    @mark_transparent
     @NVTXRange("__call__: Batch2Tensor", category="op_builder")
     def __call__(
         self,
@@ -49,7 +51,7 @@ class BatchToTensor:
     ):
         if not isinstance(batch, Batch):
             batch = _op_builder._to_batch(batch, batch_size)
-        with NVTXRange("__call__: construct Invocation", category="op_builder"):
+        with BatchToTensor._nvtx_construct_invocation:
             invocation = _invocation.Invocation(
                 self,
                 None,
@@ -64,9 +66,7 @@ class BatchToTensor:
                 is_batch=False,
                 batch_size=None,
                 previous_invocation=None,
-                # Increase the caller depth because this operator is used only internally
-                # This allows us to skip the internal frame to point to the user code
-                caller_depth=_op_builder._get_caller_depth(False) + 1,
+                caller_frame=resolve_callsite_frame(),
             )
         invocation.apply_eval_policy(_op_builder.is_external(batch))
         return Tensor(invocation_result=invocation[0])
@@ -109,6 +109,7 @@ class BatchToTensor:
 _batch_to_tensor_instance = BatchToTensor()
 
 
+@mark_transparent
 def batch_to_tensor(batch, *, pad=False, force_copy=False, device=None, dtype=None, layout=None):
     return _batch_to_tensor_instance(
         batch, pad=pad, force_copy=force_copy, device=device, dtype=dtype, layout=layout

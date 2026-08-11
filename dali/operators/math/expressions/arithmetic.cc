@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2019-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,61 @@
 
 namespace dali {
 namespace expr {
+
+std::optional<DALIDataType> PropagateTypes(
+      ExprNode &expr, span<const std::optional<DALIDataType>> input_types) {
+  if (expr.GetNodeType() == NodeType::Constant) {
+    return expr.GetTypeId();
+  }
+  if (expr.GetNodeType() == NodeType::Tensor) {
+    auto &e = dynamic_cast<ExprTensor &>(expr);
+    int idx = e.GetInputIndex();
+    if (idx < 0)
+      throw std::out_of_range("Negative input index encountered.");
+
+    if (idx >= input_types.size()) {
+      throw std::out_of_range(make_string(
+        "Input index ", idx, " is out of range. "
+        "Only ", input_types.size(), " inputs are present."));
+    }
+    if (!input_types[idx])
+      return std::nullopt;
+
+    expr.SetTypeId(*input_types[e.GetInputIndex()]);
+    return expr.GetTypeId();
+  }
+  auto &func = dynamic_cast<ExprFunc &>(expr);
+  int subexpression_count = func.GetSubexpressionCount();
+  DALI_ENFORCE(0 < subexpression_count && subexpression_count <= kMaxArity,
+               "Only unary, binary and ternary expressions are supported");
+
+  SmallVector<DALIDataType, kMaxArity> types;
+  types.resize(subexpression_count);
+  for (int i = 0; i < subexpression_count; i++) {
+    auto subexpr_type = PropagateTypes(func[i], input_types);
+    if (!subexpr_type)
+      return std::nullopt;
+    types[i] = *subexpr_type;
+  }
+  expr.SetTypeId(TypePromotion(NameToOp(func.GetFuncName()), make_span(types)));
+  return expr.GetTypeId();
+}
+
+
+DALIDataType PropagateTypes(ExprNode &expr, const Workspace &ws) {
+  SmallVector<std::optional<DALIDataType>, 8> input_types;
+  for (int i = 0; i < ws.NumInput(); i++)
+    input_types.push_back(ws.GetInputDataType(i));
+  return PropagateTypes(expr, make_cspan(input_types)).value();
+}
+
+std::optional<DALIDataType> PropagateTypes(ExprNode &expr, const OpSpec &spec) {
+  SmallVector<std::optional<DALIDataType>, 8> input_types;
+  for (int i = 0; i < spec.NumRegularInput(); i++)
+    input_types.push_back(spec.InputDesc(i).dtype);
+  return PropagateTypes(expr, make_cspan(input_types));
+}
+
 
 template <>
 void ArithmeticGenericOp<CPUBackend>::RunImpl(Workspace &ws) {
@@ -91,7 +146,61 @@ Examples::
     .NumInput(1, 64)  // Some arbitrary number that needs to be validated in operator
     .AddOptionalArg<std::vector<float>>("real_constants", "", nullptr, true)
     .NumOutput(1)
-    .MakeDocHidden();
+    .MakeDocHidden()
+    .OutputNDim(0, [](const OpSpec &spec)->std::optional<int> {
+      int ndim = 0;
+      for (int i = 0; i < spec.NumRegularInput(); i++) {
+        auto &desc = spec.InputDesc(i);
+        if (!desc.ndim)
+          return std::nullopt;
+        if (*desc.ndim > ndim)
+          ndim = *desc.ndim;
+      }
+      return ndim;
+    })
+    .OutputDType(0, [](const OpSpec &spec)->std::optional<DALIDataType> {
+      try {
+        auto ex = expr::ParseExpressionString(spec.GetArgument<std::string>("expression_desc"));
+        if (!ex)
+          return std::nullopt;
+        return PropagateTypes(*ex, spec);
+      } catch (const std::exception &) {
+        return std::nullopt;
+      }
+    })
+    .OutputLayout(0, [](const OpSpec &spec)->std::optional<TensorLayout> {
+      // Layouts must match or be suffixes (when broadcasting), e.g.:
+      // HWC + WC
+      // If any layout is not known, bail out.
+      // Empty layout is considered a suffix and skipped.
+      std::optional<TensorLayout> layout;
+      int ndim = 0;
+      for (int i = 0; i < spec.NumRegularInput(); i++) {
+        auto &desc = spec.InputDesc(i);
+        if (!desc.layout)
+          return std::nullopt;
+        if (!desc.ndim)
+          return std::nullopt;
+        if (*desc.ndim > ndim)
+          ndim = *desc.ndim;
+        if (layout.has_value()) {
+          if (layout->ndim() > desc.layout->ndim()) {
+            if (layout->sub(layout->ndim() - desc.layout->ndim()) != *desc.layout)
+              return std::nullopt;
+          } else {
+            if (desc.layout->sub(desc.layout->ndim() - layout->ndim()) != *layout)
+              return std::nullopt;
+            layout = desc.layout;
+          }
+        } else {
+          layout = desc.layout;
+        }
+      }
+      if (layout && layout->ndim() == ndim)
+        return layout;
+      else
+        return std::nullopt;
+    });
 
 DALI_REGISTER_OPERATOR(_ArithmeticGenericOp, expr::ArithmeticGenericOp<CPUBackend>, CPU);
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2019-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,18 +17,39 @@
 # OpenCV
 ##################################################################
 if (BUILD_OPENCV)
-  # For OpenCV 3 and later, 'imdecode()' is in the imgcodecs library
+  # Single find_package call with the full set of components needed for the
+  # current build. `imgcodecs` is added when BUILD_TEST is on (test fixtures
+  # use cv::imread/imwrite for golden images and diff dumps). Splitting into
+  # two find_package calls would risk core/imgproc and imgcodecs resolving
+  # against different OpenCV installs and mixing versions on the link line.
+  set(_opencv_components core imgproc)
+  if (BUILD_TEST)
+    list(APPEND _opencv_components imgcodecs)
+  endif()
 
-  find_package(OpenCV 4.0 QUIET COMPONENTS core imgproc imgcodecs)
+  find_package(OpenCV 4.0 QUIET COMPONENTS ${_opencv_components})
   if(NOT OpenCV_FOUND)
-    find_package(OpenCV 3.0 REQUIRED COMPONENTS core imgproc imgcodecs)
+    find_package(OpenCV 3.0 REQUIRED COMPONENTS ${_opencv_components})
   endif()
 
   message(STATUS "Found OpenCV: ${OpenCV_INCLUDE_DIRS} (found suitable version \"${OpenCV_VERSION}\", minimum required is \"3.0\")")
   include_directories(SYSTEM ${OpenCV_INCLUDE_DIRS})
-  list(APPEND DALI_LIBS ${OpenCV_LIBRARIES})
-  message("OpenCV libraries: ${OpenCV_LIBRARIES}")
-  list(APPEND DALI_EXCLUDES libopencv_core.a;libopencv_imgproc.a;libopencv_highgui.a;libopencv_imgcodecs.a;liblibwebp.a;libittnotify.a;libpng.a;liblibtiff.a;liblibjasper.a;libIlmImf.a;liblibjpeg-turbo.a)
+
+  # Production link line: only core+imgproc, never imgcodecs (keeps libdali
+  # free of opencv_imgcodecs and its bundled codec statics:
+  # libwebp/libpng/libjasper/libIlmImf/libtiff).
+  list(APPEND DALI_LIBS opencv_core opencv_imgproc)
+  message("OpenCV production libraries: opencv_core opencv_imgproc")
+  list(APPEND DALI_EXCLUDES libopencv_core.a;libopencv_imgproc.a;libopencv_highgui.a)
+
+  if (BUILD_TEST)
+    set(DALI_OPENCV_TEST_EXTRA_LIBS opencv_imgcodecs CACHE INTERNAL
+        "OpenCV imgcodecs target, for test executables only")
+  else()
+    # Drop any stale value from a previous BUILD_TEST=ON configuration so a
+    # reconfigure to BUILD_TEST=OFF cannot leave imgcodecs hanging in the cache.
+    unset(DALI_OPENCV_TEST_EXTRA_LIBS CACHE)
+  endif()
 endif()
 
 ##################################################################
@@ -56,27 +77,6 @@ if (BUILD_BENCHMARK)
   check_and_add_cmake_submodule(${PROJECT_SOURCE_DIR}/third_party/benchmark EXCLUDE_FROM_ALL)
   include_directories(SYSTEM ${PROJECT_SOURCE_DIR}/third_party/benchmark/include/benchmark)
   set_target_properties(benchmark PROPERTIES POSITION_INDEPENDENT_CODE ON)
-endif()
-
-##################################################################
-# libjpeg-turbo
-##################################################################
-if (BUILD_JPEG_TURBO)
-  find_package(JPEG 62 REQUIRED) # 1.5.3 version
-  include_directories(${JPEG_INCLUDE_DIR})
-  message("Using libjpeg-turbo at ${JPEG_LIBRARY}")
-  list(APPEND DALI_LIBS ${JPEG_LIBRARY})
-  add_definitions(-DDALI_USE_JPEG_TURBO)
-endif()
-
-##################################################################
-# libtiff
-##################################################################
-if (BUILD_LIBTIFF)
-  find_package(TIFF REQUIRED)
-  include_directories(${TIFF_INCLUDE_DIR})
-  message("Using libtiff at ${TIFF_LIBRARY}")
-  list(APPEND DALI_LIBS ${TIFF_LIBRARY})
 endif()
 
 ##################################################################
@@ -159,7 +159,7 @@ if(BUILD_NVCOMP)
     list(APPEND DALI_LIBS ${nvcomp_LIBS})
   else()
     message(STATUS "Found nvCOMP: ${nvcomp_INCLUDE_DIR}.")
-    set(DALI_INSTALL_REQUIRES_NVCOMP "\'nvidia-libnvcomp-cu${CUDA_VERSION_MAJOR} == 5.1.0.21\',")
+    set(DALI_INSTALL_REQUIRES_NVCOMP "\'nvidia-libnvcomp-cu${CUDA_VERSION_MAJOR} == 5.2.0.13\',")
     message(STATUS "Adding nvComp requirement as: ${DALI_INSTALL_REQUIRES_NVCOMP}")
   endif()
 endif()
@@ -297,8 +297,8 @@ endif()
 ##################################################################
 set(DALI_INSTALL_REQUIRES_NVIMGCODEC "")
 if(BUILD_NVIMAGECODEC)
-  set(NVIMGCODEC_MIN_VERSION "0.7.0")
-  set(NVIMGCODEC_MAX_VERSION "0.8.0")
+  set(NVIMGCODEC_MIN_VERSION "0.8.0")
+  set(NVIMGCODEC_MAX_VERSION "0.9.0")
   message(STATUS "nvImageCodec - requires version >=${NVIMGCODEC_MIN_VERSION}, <${NVIMGCODEC_MAX_VERSION}")
   if (WITH_DYNAMIC_NVIMGCODEC)
     message(STATUS "nvImageCodec - dynamic load")
@@ -315,8 +315,8 @@ if(BUILD_NVIMAGECODEC)
       include(FetchContent)
       FetchContent_Declare(
         nvimgcodec_headers
-        URL      https://developer.download.nvidia.com/compute/nvimgcodec/redist/nvimgcodec/linux-x86_64/nvimgcodec-linux-x86_64-0.7.0.11-archive.tar.xz
-        URL_HASH SHA512=0777af0a41500de7aaeffb6966b3da20271f807c6af106307b9759854c082d5b6f850c0455b011b8978fc5954514bb46dbd5da0904d471309adf9fdfbaf7dd98
+        URL      https://developer.download.nvidia.com/compute/nvimgcodec/redist/nvimgcodec/linux-x86_64/nvimgcodec-linux-x86_64-0.8.0.22-archive.tar.xz
+        URL_HASH SHA512=2a400f75c619a10c3dbcd298a83ef3307f6e08453b2cfb5040f6b22c64c7be0ac4552a2a80ed057afe7657cf0bb8cc2d54cdccf8bc50ffdf34cfd05b45082978
       )
       FetchContent_Populate(nvimgcodec_headers)
       set(nvimgcodec_INCLUDE_DIR "${nvimgcodec_headers_SOURCE_DIR}/${CUDA_VERSION_MAJOR}/include")
@@ -334,13 +334,12 @@ if(BUILD_NVIMAGECODEC)
     if("$ENV{ARCH}" STREQUAL "aarch64-linux")
       message(STATUS "ARCH is set to aarch64-linux")
       set(NVIMGCODEC_PACKAGE_NAME "nvidia-nvimgcodec-tegra-cu${CUDA_VERSION_MAJOR}[all]")
-      set(DALI_INSTALL_REQUIRES_NVIMGCODEC "")
     else()
       message(STATUS "ARCH is set to $ENV{ARCH}")
       set(NVIMGCODEC_PACKAGE_NAME "nvidia-nvimgcodec-cu${CUDA_VERSION_MAJOR}[all]")
-      set(DALI_INSTALL_REQUIRES_NVIMGCODEC "\'${NVIMGCODEC_PACKAGE_NAME} >= ${NVIMGCODEC_MIN_VERSION}, < ${NVIMGCODEC_MAX_VERSION}',")
-      message(STATUS "Adding nvimagecodec requirement as: ${DALI_INSTALL_REQUIRES_NVIMGCODEC}")
     endif()
+    set(DALI_INSTALL_REQUIRES_NVIMGCODEC "\'${NVIMGCODEC_PACKAGE_NAME} >= ${NVIMGCODEC_MIN_VERSION}, < ${NVIMGCODEC_MAX_VERSION}',")
+    message(STATUS "Adding nvimagecodec requirement as: ${DALI_INSTALL_REQUIRES_NVIMGCODEC}")
   else()
     message(STATUS "nvImageCodec - static link")
 
@@ -357,7 +356,7 @@ if(BUILD_NVIMAGECODEC)
     ExternalProject_Add(
       nvImageCodec
       GIT_REPOSITORY    https://github.com/NVIDIA/nvImageCodec.git
-      GIT_TAG           v0.7.0
+      GIT_TAG           v0.8.0
       GIT_SUBMODULES    "external/pybind11"
                         "external/NVTX"
                         "external/googletest"
@@ -368,16 +367,16 @@ if(BUILD_NVIMAGECODEC)
                         "-DBUILD_TEST=OFF"
                         "-DBUILD_SAMPLES=OFF"
                         "-DBUILD_PYTHON=OFF"
-                        "-DBUILD_NVJPEG2K_EXT=${BUILD_NVJPEG2K}"
+                        "-DBUILD_NVJPEG2K_EXT=ON"
                         "-DWITH_DYNAMIC_NVJPEG2K=OFF"
-                        "-DBUILD_NVJPEG_EXT=${BUILD_NVJPEG}"
-                        "-DWITH_DYNAMIC_NVJPEG=${WITH_DYNAMIC_NVJPEG}"
+                        "-DBUILD_NVJPEG_EXT=ON"
+                        "-DWITH_DYNAMIC_NVJPEG=OFF"
                         "-DBUILD_NVTIFF_EXT=OFF"
                         "-DWITH_DYNAMIC_NVTIFF=OFF"
                         "-DBUILD_NVBMP_EXT=OFF"
                         "-DBUILD_NVPNM_EXT=OFF"
-                        "-DBUILD_LIBJPEG_TURBO_EXT=${BUILD_LIBJPEG_TURBO}"
-                        "-DBUILD_LIBTIFF_EXT=${BUILD_LIBTIFF}"
+                        "-DBUILD_LIBJPEG_TURBO_EXT=ON"
+                        "-DBUILD_LIBTIFF_EXT=ON"
                         "-DBUILD_OPENCV_EXT=${BUILD_OPENCV}"
                         "-DBUILD_DOCS=OFF"
                         "${EXTRA_CMAKE_OPTIONS_LIST}"
@@ -397,26 +396,17 @@ if(BUILD_NVIMAGECODEC)
     list(APPEND NVIMGCODEC_LIBS opencv_ext_static)
     list(APPEND DALI_EXCLUDES libopencv_ext_static.a)
 
-    if (BUILD_LIBJPEG_TURBO)
-      message(STATUS "nvImageCodec - Include libjpeg-turbo extension")
-      list(APPEND NVIMGCODEC_LIBS jpeg_turbo_ext_static)
-      list(APPEND DALI_EXCLUDES libjpeg_turbo_ext_static.a)
-      endif()
-    if (BUILD_LIBTIFF)
-      message(STATUS "nvImageCodec - Include libtiff extension")
-      list(APPEND NVIMGCODEC_LIBS tiff_ext_static)
-      list(APPEND DALI_EXCLUDES libtiff_ext_static.a)
-      endif()
-    if (BUILD_NVJPEG2K)
-      message(STATUS "nvImageCodec - Include nvjpeg2k extension")
-      list(APPEND NVIMGCODEC_LIBS nvjpeg2k_ext_static)
-      list(APPEND DALI_EXCLUDES libnvjpeg2k_ext_static.a)
-      endif()
-    if (BUILD_NVJPEG)
-      message(STATUS "nvImageCodec - Include nvjpeg extension")
-      list(APPEND NVIMGCODEC_LIBS nvjpeg_ext_static)
-      list(APPEND DALI_EXCLUDES libnvjpeg_ext_static.a)
-      endif()
+    list(APPEND NVIMGCODEC_LIBS jpeg_turbo_ext_static)
+    list(APPEND DALI_EXCLUDES libjpeg_turbo_ext_static.a)
+
+    list(APPEND NVIMGCODEC_LIBS tiff_ext_static)
+    list(APPEND DALI_EXCLUDES libtiff_ext_static.a)
+
+    list(APPEND NVIMGCODEC_LIBS nvjpeg2k_ext_static)
+    list(APPEND DALI_EXCLUDES libnvjpeg2k_ext_static.a)
+
+    list(APPEND NVIMGCODEC_LIBS nvjpeg_ext_static)
+    list(APPEND DALI_EXCLUDES libnvjpeg_ext_static.a)
   endif()
 endif()
 

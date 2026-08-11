@@ -17,20 +17,13 @@ source $topdir/qa/setup_test_common.sh
 
 # Set runner for python tests
 export PYTHONPATH=${PYTHONPATH}:$topdir/qa:$topdir/dali/test/python
-python_test_runner_package="nose nose2 nose-timer nose2-test-timer"
-# use DALI nose wrapper to patch nose to support Python 3.10
-python_test_runner="python -m nose_wrapper"
-python_test_args="--verbose --with-timer --timer-top-n 20 -s"
-python_invoke_test="${python_test_runner} ${python_test_args}"
-
-# New framework for Python Tests
-# During the transition we run both
-# When all tests are ported old will be removed
+python_test_runner_package="nose2 nose2-test-timer"
+# Python test runner (nose2)
 python_new_test_runner="python -m nose2"
 python_new_test_args="--verbose --plugin=nose2_test_timer.plugin --with-timer --timer-color --timer-top-n 20"
 python_new_invoke_test="${python_new_test_runner} ${python_new_test_args}"
 
-# Set proper CUDA version for packages, like MXNet, requiring it
+# Set proper CUDA version for packages, requiring it
 pip_packages=$(eval "echo \"${pip_packages}\"" | sed "s/##CUDA_VERSION##/${CUDA_VERSION}/")
 last_config_index=$($topdir/qa/setup_packages.py -n -u $pip_packages --cuda ${CUDA_VERSION})
 
@@ -72,8 +65,6 @@ epilog=${epilog-:}
 numer_of_prolog_elms=${#prolog[@]}
 
 enable_sanitizer() {
-    export ASAN_OPTIONS=symbolize=1:protect_shadow_gap=0:log_path=sanitizer.log:start_deactivated=true:allocator_may_return_null=1:detect_leaks=1:fast_unwind_on_malloc=0:verify_asan_link_order=0:detect_container_overflow=0:suppressions=$topdir/qa/address.sup
-    export ASAN_SYMBOLIZER_PATH=$(which llvm-symbolizer)
     # avoid python false positives
     export PYTHONMALLOC=malloc
     # if something calls dlclose on a module that leaks and it happens before asan can extract symbols we get "unknown module"
@@ -83,7 +74,13 @@ enable_sanitizer() {
     export LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libasan.so /tmp/glibc_fix.so /tmp/libfakeclose.so /usr/lib/x86_64-linux-gnu/libstdc++.so"
     # Workaround for bug in asan ignoring RPATHs https://bugzilla.redhat.com/show_bug.cgi?id=1449604
     export OLD_LD_LIBRARY_PATH2=${LD_LIBRARY_PATH}  # OLD_LD_LIBRARY_PATH variable name already used
-    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(python -c 'import nvidia.nvimgcodec as n; import os; print(os.path.dirname(n.__file__))')
+    # first provide paths to nvimgcodec deps then learn its location
+    export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:"$(python -c 'import nvidia.nvjpeg2k as n, os; print(os.path.dirname(n.__file__) + "/lib")' 2>/dev/null || echo '')"
+    export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:"$(python -c 'import nvidia.nvtiff as n, os; print(os.path.dirname(n.__file__) + "/lib")' 2>/dev/null || echo '')"
+    export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:"$(python -c 'import nvidia.nvimgcodec as n, os; print(os.path.dirname(n.__file__))' 2>/dev/null || echo '')"
+
+    export ASAN_OPTIONS=symbolize=1:protect_shadow_gap=0:log_path=sanitizer.log:start_deactivated=false:allocator_may_return_null=1:detect_leaks=1:fast_unwind_on_malloc=0:verify_asan_link_order=0:detect_container_overflow=0:suppressions=$topdir/qa/address.sup
+    export ASAN_SYMBOLIZER_PATH=$(which llvm-symbolizer)
 }
 
 # turn off sanitizer to avoid breaking any non-related system built-ins
@@ -202,6 +199,16 @@ do
                 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH##*:}
             fi
         fi
+        export OLD_TF_LD_LIBRARY_PATH=${LD_LIBRARY_PATH}
+        if [[ "$inst" == *tensorflow* ]]; then
+            # Only update LD_LIBRARY_PATH for TensorFlow 2.1 which doesn't define cuSolver library path in its rpath
+            TF_VERSION=$(${python_binary:-python} -c "import tensorflow as tf; print(tf.__version__)")
+            if [[ "${TF_VERSION}" == 2.21* ]]; then
+                # Use path returned by pip show pip and append nvidia/cusolver/lib/ to it
+                PIP_PATH=$(${python_binary:-python} -m pip show pip | awk -F': ' '/Location: /{print $2}')
+                export LD_LIBRARY_PATH="${PIP_PATH}/nvidia/cusolver/lib:${LD_LIBRARY_PATH}"
+            fi
+        fi
         # test code
         # Run test_body in subshell, the exit on error is turned off in current shell,
         # but it will be present in subshell (thanks to wrapper).
@@ -211,6 +218,7 @@ do
         test_body_wrapper
         RV=$?
         set -e
+        export LD_LIBRARY_PATH=${OLD_TF_LD_LIBRARY_PATH}
         if [ -n "$DALI_ENABLE_SANITIZERS" ]; then
             process_sanitizers_logs
         fi

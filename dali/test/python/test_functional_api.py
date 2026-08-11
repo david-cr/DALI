@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2020-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ import numpy as np
 from nose_utils import assert_raises, attr
 import sys
 import inspect
-import nose
 
 
 def _test_fn_rotate(device):
@@ -138,6 +137,32 @@ def test_scalar_constant():
     assert np.array_equal(arr3, ref3)
 
 
+def test_pseudoscalar():
+    pipe = Pipeline(batch_size=1, num_threads=1, device_id=0)
+
+    image1 = np.array([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]], dtype=np.uint8)[
+        :, :, np.newaxis
+    ]
+    image2 = np.array([[10, 20], [30, 40], [50, 60]], dtype=np.uint8)[:, :, np.newaxis]
+    batches = [[image1], [image2]]
+
+    inputs = fn.external_source(lambda: batches, 2, layout="HWC")
+    rotated = fn.rotate(inputs, angle=np.array([90]))  # demoted to a scalar
+    assert rotated[0].source.spec.NumInput() == 1  # verify that `angle` is not an input
+    pipe.set_outputs(*rotated, types.ScalarConstant(np.array([90])))  # demoted to 0D
+
+    outs = pipe.run()
+    arr1 = outs[0].at(0)
+    arr2 = outs[1].at(0)
+    arr3 = outs[2].at(0)
+    ref1 = np.array([[4, 8, 12], [3, 7, 11], [2, 6, 10], [1, 5, 9]])[:, :, np.newaxis]
+    ref2 = np.array([[20, 40, 60], [10, 30, 50]], dtype=np.uint8)[:, :, np.newaxis]
+    ref3 = np.array(90)
+    assert np.array_equal(arr1, ref1)
+    assert np.array_equal(arr2, ref2)
+    assert np.array_equal(arr3, ref3)
+
+
 def test_to_snake_case_impl():
     fn_name_tests = [
         ("Test", "test"),
@@ -185,7 +210,7 @@ def _test_schema_name_for_module(module_name, base_name=""):
             # Check if we can reconstruct the name of the op from provided schema
             assert hasattr(member, "_schema_name")
             full_name = ops._op_name(member._schema_name)
-            nose.tools.eq_(base_name + "." + full_name, module_name + "." + member_name)
+            assert base_name + "." + full_name == module_name + "." + member_name
         elif inspect.ismodule(member) and (module_name + "." + member_name) in sys.modules.keys():
             # Recurse on DALI submodule (filter out non-DALI reexported modules like `sys`)
             _test_schema_name_for_module(module_name + "." + member_name, base_name)

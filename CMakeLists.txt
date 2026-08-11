@@ -1,4 +1,4 @@
-# Copyright (c) 2017-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -88,10 +88,6 @@ cmake_dependent_option(USE_PREBUILD_PYBIND11 "Use prebuilt pybind11 from the sys
                        "BUILD_PYTHON" OFF)
 cmake_dependent_option(BUILD_LMDB "Build LMDB readers" ON
                        "NOT BUILD_DALI_NODEPS" OFF)
-cmake_dependent_option(BUILD_JPEG_TURBO "Build with libjpeg-turbo support" ON
-                       "NOT BUILD_DALI_NODEPS" OFF)
-cmake_dependent_option(BUILD_LIBTIFF "Build with libtiff support" ON
-                       "NOT BUILD_DALI_NODEPS" OFF)
 cmake_dependent_option(BUILD_LIBSND "Build with support for libsnd library" ON
                        "NOT BUILD_DALI_NODEPS" OFF)
 cmake_dependent_option(BUILD_LIBTAR "Build with support for libtar library" ON
@@ -132,19 +128,11 @@ cmake_dependent_option(BUILD_NVDEC "Build with NVIDIA NVDEC support" ON
                        "NOT BUILD_DALI_NODEPS" OFF)  # Video support requires ffmpeg as well
 set(BUILD_FFMPEG ${BUILD_NVDEC})
 
-cmake_dependent_option(BUILD_NVJPEG "Build with nvJPEG support" ON
-                       "NOT BUILD_DALI_NODEPS" OFF)
-
-cmake_dependent_option(BUILD_NVJPEG2K "Build with nvJPEG2K support" ON
-                        "NOT BUILD_DALI_NODEPS" OFF)
-
 cmake_dependent_option(BUILD_NVOF "Build with NVIDIA OPTICAL FLOW SDK support" ON
                        "NOT BUILD_DALI_NODEPS" OFF)
 cmake_dependent_option(BUILD_NVML "Build with NVIDIA Management Library (NVML) support" ON
                        "NOT BUILD_DALI_NODEPS" OFF)
 
-cmake_dependent_option(WITH_DYNAMIC_NVJPEG "Dynamicly load nvJPEG" ON
-                      "WITH_DYNAMIC_CUDA_TOOLKIT;BUILD_NVJPEG" OFF)
 cmake_dependent_option(WITH_DYNAMIC_CUFFT "Dynamicly load cuFFT" ON
                       "WITH_DYNAMIC_CUDA_TOOLKIT;BUILD_FFTS" OFF)
 cmake_dependent_option(WITH_DYNAMIC_NPP "Dynamicly load npp" ON
@@ -331,15 +319,11 @@ propagate_option(BUILD_NVTX)
 propagate_option(BUILD_PYTHON)
 propagate_option(BUILD_SHM_WRAPPER)
 propagate_option(BUILD_LMDB)
-propagate_option(BUILD_JPEG_TURBO)
-propagate_option(BUILD_LIBTIFF)
 propagate_option(BUILD_LIBSND)
 propagate_option(BUILD_LIBTAR)
 propagate_option(BUILD_FFTS)
 propagate_option(BUILD_CFITSIO)
 propagate_option(BUILD_CVCUDA)
-propagate_option(BUILD_NVJPEG)
-propagate_option(BUILD_NVJPEG2K)
 propagate_option(BUILD_NVOF)
 propagate_option(BUILD_NVDEC)
 propagate_option(BUILD_FFMPEG)
@@ -349,7 +333,6 @@ propagate_option(BUILD_CUFILE)
 propagate_option(BUILD_NVIMAGECODEC)
 propagate_option(BUILD_AWSSDK)
 propagate_option(LINK_DRIVER)
-propagate_option(WITH_DYNAMIC_NVJPEG)
 propagate_option(WITH_DYNAMIC_CUFFT)
 propagate_option(WITH_DYNAMIC_NPP)
 propagate_option(WITH_DYNAMIC_NVIMGCODEC)
@@ -410,6 +393,8 @@ endif()
 if (BUILD_STD_SEMAPHORE)
   add_definitions("-DDALI_USE_STD_SEMAPHORE")
 endif()
+
+add_definitions("-DDALI_SCHEMA_DEFAULT_METADATA_POLICY")
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-register -Wsign-compare -Wno-deprecated-declarations")

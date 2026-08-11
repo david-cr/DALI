@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2017-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1007,6 +1007,51 @@ DALI_SCHEMA(CoverageStatelessChild)
 TEST(OpSchemaTest, IsStatefulWithStatelessParent) {
   auto &schema = SchemaRegistry::GetSchema("CoverageStatelessChild");
   EXPECT_FALSE(schema.IsStateful());
+}
+
+DALI_SCHEMA(DummyPassthrough)
+  .NumInput(1)
+  .NumOutput(1);
+
+TEST(OpSchemaTest, OutputMetadataPassthrough) {
+  auto &schema = SchemaRegistry::GetSchema("DummyPassthrough");
+  auto spec = OpSpec("DummyPassthrough");
+  spec.AddInput("in", StorageDevice::CPU, 3, DALI_FLOAT, "HWC");
+
+  ASSERT_EQ(schema.CalculateOutputDType(0, spec), DALI_FLOAT);
+  ASSERT_EQ(schema.CalculateOutputNDim(0, spec), 3);
+  ASSERT_EQ(schema.CalculateOutputLayout(0, spec), TensorLayout("HWC"));
+}
+
+DALI_SCHEMA(DummyPartialCallbacks)
+  .NumInput(1)
+  .NumOutput(1)
+  .OutputLayout(0, [](const OpSpec &) { return "abcd"; });
+
+TEST(OpSchemaTest, OutputMetadataPartial) {
+  auto &schema = SchemaRegistry::GetSchema("DummyPartialCallbacks");
+  auto spec = OpSpec("DummyPartialCallbacks");
+  spec.AddInput("in", StorageDevice::CPU, 3, DALI_FLOAT, "HWC");
+
+  ASSERT_EQ(schema.CalculateOutputDType(0, spec), DALI_FLOAT);  // from input
+  ASSERT_EQ(schema.CalculateOutputNDim(0, spec), 4);  // from layout
+  ASSERT_EQ(schema.CalculateOutputLayout(0, spec), TensorLayout("abcd"));  // from callback
+}
+
+DALI_SCHEMA(DummyMultiOutput)
+  .NumInput(1)
+  .NumOutput(3)
+  .OutputDType(1, DALI_INT32);
+
+TEST(OpSchemaTest, OutputMetadataMultiOutput) {
+  auto &schema = SchemaRegistry::GetSchema("DummyMultiOutput");
+  auto spec = OpSpec("DummyMultiOutput");
+  spec.AddInput("in", StorageDevice::CPU, {}, DALI_FLOAT);
+
+  ASSERT_EQ(schema.CalculateOutputDType(0, spec), DALI_FLOAT);
+  ASSERT_EQ(schema.CalculateOutputDType(1, spec), DALI_INT32);
+  ASSERT_FALSE(schema.CalculateOutputDType(2, spec).has_value());
+  ASSERT_FALSE(schema.CalculateOutputNDim(0, spec).has_value());
 }
 
 }  // namespace dali
