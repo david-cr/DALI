@@ -2379,13 +2379,18 @@ TEST_F(DaliFileTest, MmapedFileStreamMemoryPressureMMAPFailure) {
 }
 
 // Test: MmapedFileStream - ReserveFileMappings returns false when over limit
-// Exercises the "num + reserved > max" branch (line 225) of ReserveFileMappings.
+// Exercises the "num + reserved > max" branch of ReserveFileMappings.
 TEST_F(DaliFileTest, MmapedFileStreamReserveExceedsLimit) {
-  // Use UINT_MAX as the requested count to guarantee exceeding the limit
-  // (dali_max_mv_cnt is system-dependent but never approaches UINT_MAX).
+  // UINT_MAX exceeds the mapping limit on any system, so it must be rejected no
+  // matter how many mappings the tests above left reserved. Requesting the
+  // largest possible count also guards the check against unsigned overflow.
   bool success = MmapedFileStream::ReserveFileMappings(
       std::numeric_limits<unsigned int>::max());
   EXPECT_FALSE(success);
+
+  // A rejected request must not consume any of the reservation budget.
+  ASSERT_TRUE(MmapedFileStream::ReserveFileMappings(1));
+  MmapedFileStream::FreeFileMappings(1);
 }
 
 // Test 70: MmapedFileStream - Concurrent MMAP Stress Test
