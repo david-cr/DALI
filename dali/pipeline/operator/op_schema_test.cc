@@ -264,8 +264,12 @@ TEST(OpSchemaTest, OptionalHiddenArg) {
 
 // Test RegisterSchema with duplicate registration (covers line 36)
 TEST(OpSchemaTest, RegisterSchemaDuplicate) {
-  // Try to register a schema that already exists
-  EXPECT_THROW(SchemaRegistry::RegisterSchema("Dummy1"), std::logic_error);
+  // Re-registering an existing schema is not an error - the registry keeps the
+  // original entry and hands back a reference to it.
+  const OpSchema *existing = &SchemaRegistry::GetSchema("Dummy1");
+  const OpSchema *reregistered = nullptr;
+  ASSERT_NO_THROW(reregistered = &SchemaRegistry::RegisterSchema("Dummy1"));
+  EXPECT_EQ(existing, reregistered);
 }
 
 // Test GetSchema with missing schema (covers line 49)

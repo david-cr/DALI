@@ -514,14 +514,20 @@ TEST(OpSpecTest, AddInputIncompatibleDevice) {
     std::runtime_error);
 }
 
-// Test AddInput: named input must be CPU (covers line 84)
-TEST(OpSpecTest, AddInputNamedGPU) {
-  auto spec = OpSpec("DummyInputErrorTests");
+// Test that argument inputs are always CPU: AddArgumentInput takes no device,
+// so a GPU argument input cannot be expressed, while regular inputs keep theirs.
+TEST(OpSpecTest, ArgumentInputIsAlwaysCPU) {
+  auto spec = OpSpec("DummyInputErrorTests")
+              .AddInput("input", StorageDevice::GPU)
+              .AddArgumentInput("tensor_arg", "arg_input");
 
-  // Try to add named (argument) input on GPU - should throw
-  EXPECT_THROW(
-    spec.AddInput("arg_input", StorageDevice::GPU, false),
-    std::runtime_error);
+  ASSERT_EQ(spec.NumRegularInput(), 1);
+  ASSERT_EQ(spec.NumArgumentInput(), 1);
+
+  int arg_idx = spec.NumRegularInput();
+  EXPECT_TRUE(spec.IsArgumentInput(arg_idx));
+  EXPECT_EQ(spec.InputDevice(arg_idx), StorageDevice::CPU);
+  EXPECT_EQ(spec.InputDevice(0), StorageDevice::GPU);
 }
 
 // ===== AddOutput Error Path Tests =====
