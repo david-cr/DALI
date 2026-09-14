@@ -13,7 +13,11 @@
 // limitations under the License.
 
 #include <gtest/gtest.h>
+#include <atomic>
+#include <chrono>
 #include <iostream>
+#include <stdexcept>
+#include <thread>
 #include "dali/core/exec/thread_pool_base.h"
 #include "dali/core/format.h"
 #include "dali/test/timing.h"
@@ -329,6 +333,178 @@ TYPED_TEST(NewThreadPoolJobTest, JobPerf) {
 
   double job_overhead = test::seconds(time0 - time1) / (jobs0 - jobs1);
   print(std::cout, "Job overhead ", test::format_time(job_overhead), "\n");
+}
+
+/** Exposes ThreadPoolBase::Shutdown, which is protected, so that the tests can drive
+ * the thread pool's post-shutdown behavior. */
+class TestableThreadPool : public ThreadPoolBase {
+ public:
+  using ThreadPoolBase::ThreadPoolBase;
+  using ThreadPoolBase::Shutdown;
+};
+
+TYPED_TEST(NewThreadPoolJobTest, ErrorWaitTwice) {
+  ThreadPoolBase tp(4);
+  TypeParam job;
+  job.AddTask([]() {});
+  job.Run(tp, true);
+  try {
+    job.Wait();
+  } catch (std::logic_error &e) {
+    EXPECT_NE(nullptr, strstr(e.what(), "already been waited for"));
+    return;
+  }
+  GTEST_FAIL() << "Expected a logic error.";
+}
+
+TYPED_TEST(NewThreadPoolJobTest, WaitEmptyJobWithoutRun) {
+  TypeParam job;
+  // A job with no tasks may skip Run altogether, so waiting for it is legal.
+  EXPECT_NO_THROW(job.Wait());
+  EXPECT_FALSE(job.Started());
+  EXPECT_TRUE(job.WaitStarted());
+  EXPECT_TRUE(job.WaitCompleted());
+}
+
+TYPED_TEST(NewThreadPoolJobTest, ErrorDiscardAfterRun) {
+  ThreadPoolBase tp(4);
+  TypeParam job;
+  job.AddTask([]() {});
+  job.Run(tp, true);
+  try {
+    job.Discard();
+  } catch (std::logic_error &e) {
+    EXPECT_NE(nullptr, strstr(e.what(), "already been started"));
+    return;
+  }
+  GTEST_FAIL() << "Expected a logic error.";
+}
+
+TYPED_TEST(NewThreadPoolNonCooperativeJobTest, ErrorWaitFromInsideThreadPool) {
+  ThreadPoolBase tp(4);
+  TypeParam job;
+  job.AddTask([]() {});
+  job.Run(tp, false);
+
+  // A non-cooperative job cannot be waited for from within the pool it runs in.
+  Job probe;
+  probe.AddTask([&]() {
+    job.Wait();
+  });
+  try {
+    probe.Run(tp, true);
+  } catch (std::logic_error &e) {
+    EXPECT_NE(nullptr, strstr(e.what(), "from inside the thread pool"));
+    job.Wait();
+    return;
+  }
+  job.Wait();
+  GTEST_FAIL() << "Expected a logic error.";
+}
+
+TEST(NewThreadPool, ErrorRunJobTwice) {
+  ThreadPoolBase tp(4);
+  Job job;
+  job.AddTask([]() {});
+  job.Run(tp, true);
+  try {
+    job.Run(tp, true);
+  } catch (std::logic_error &e) {
+    EXPECT_NE(nullptr, strstr(e.what(), "already been started"));
+    return;
+  }
+  GTEST_FAIL() << "Expected a logic error.";
+}
+
+TEST(NewThreadPool, ErrorIncrementalJobInAnotherExecutor) {
+  ThreadPoolBase tp1(2), tp2(2);
+  IncrementalJob job;
+  job.AddTask([]() {});
+  job.Run(tp1, true);
+  try {
+    job.Run(tp2, true);
+  } catch (std::logic_error &e) {
+    EXPECT_NE(nullptr, strstr(e.what(), "different executor"));
+    return;
+  }
+  GTEST_FAIL() << "Expected a logic error.";
+}
+
+TEST(NewThreadPool, ErrorInitTwice) {
+  ThreadPoolBase tp(2);
+  try {
+    tp.Init(2);
+  } catch (std::logic_error &e) {
+    EXPECT_NE(nullptr, strstr(e.what(), "already started"));
+    return;
+  }
+  GTEST_FAIL() << "Expected a logic error.";
+}
+
+TEST(NewThreadPool, ErrorInitAfterShutdown) {
+  TestableThreadPool tp(2);
+  tp.Shutdown(true);
+  EXPECT_EQ(tp.NumThreads(), 0);
+  try {
+    tp.Init(2);
+  } catch (std::logic_error &e) {
+    EXPECT_NE(nullptr, strstr(e.what(), "being shut down"));
+    return;
+  }
+  GTEST_FAIL() << "Expected a logic error.";
+}
+
+TEST(NewThreadPool, ErrorAddTaskAfterShutdown) {
+  TestableThreadPool tp(2);
+  tp.Shutdown(true);
+  try {
+    tp.AddTask([]() {});
+  } catch (std::logic_error &e) {
+    EXPECT_NE(nullptr, strstr(e.what(), "no longer accepts new tasks"));
+    return;
+  }
+  GTEST_FAIL() << "Expected a logic error.";
+}
+
+TEST(NewThreadPool, ShutdownIsIdempotent) {
+  TestableThreadPool never_started;
+  EXPECT_NO_THROW(never_started.Shutdown(true));
+
+  TestableThreadPool tp(2);
+  tp.Shutdown(true);
+  EXPECT_NO_THROW(tp.Shutdown(false));
+  EXPECT_NO_THROW(tp.Shutdown(true));
+  EXPECT_EQ(tp.NumThreads(), 0);
+}
+
+TEST(NewThreadPool, CooperativeWaitWithEmptyTaskQueue) {
+  ThreadPoolBase tp(4);
+  std::atomic_bool release{false}, waiting{false};
+
+  CooperativeJob slow;
+  slow.AddTask([&]() {
+    while (!release.load())
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+  });
+  slow.Run(tp, false);
+
+  // Releases the slow task only after the cooperative wait has had a chance to spin
+  // for a while with nothing left in the pool's task queue.
+  std::thread releaser([&]() {
+    while (!waiting.load())
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    release = true;
+  });
+
+  CooperativeJob waiter;
+  waiter.AddTask([&]() {
+    waiting = true;
+    slow.Wait();
+  });
+  waiter.Run(tp, true);
+  releaser.join();
+  EXPECT_TRUE(slow.WaitCompleted());
 }
 
 }  // namespace dali
