@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 #include <curand_kernel.h>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include "dali/core/random/philox.h"
@@ -159,6 +160,55 @@ TEST(TestPhilox, StringSerialization) {
   auto state1 = philox1.get_state();
   auto state2 = philox2.get_state();
   ASSERT_EQ(memcmp(&state1, &state2, sizeof(Philox4x32_10::State)), 0);
+}
+
+TEST(TestPhilox, StateFromStringAcceptsLowerCaseHex) {
+  // state_to_string emits upper case digits, but the parser takes either case.
+  const char upper_str[] = "Philox_0123456789ABCDEF_0123456789ABCDEF:0123456789ABCDEF_3";
+  const char lower_str[] = "Philox_0123456789abcdef_0123456789abcdef:0123456789abcdef_3";
+  Philox4x32_10::State upper{}, lower{};
+  Philox4x32_10::state_from_string(upper, upper_str);
+  Philox4x32_10::state_from_string(lower, lower_str);
+  // Compared field by field - State has trailing padding that nothing initializes.
+  EXPECT_EQ(upper.key, lower.key);
+  EXPECT_EQ(upper.ctr[0], lower.ctr[0]);
+  EXPECT_EQ(upper.ctr[1], lower.ctr[1]);
+  EXPECT_EQ(upper.phase, lower.phase);
+  EXPECT_EQ(upper.key, 0x0123456789ABCDEFuL);
+  EXPECT_EQ(upper.phase, 3);
+}
+
+TEST(TestPhilox, StateFromStringErrors) {
+  const std::string valid = "Philox_0123456789ABCDEF_0123456789ABCDEF:0123456789ABCDEF_0";
+  Philox4x32_10::State state{};
+  ASSERT_NO_THROW(Philox4x32_10::state_from_string(state, valid));
+
+  EXPECT_THROW(Philox4x32_10::state_from_string(state, valid.substr(0, valid.size() - 1)),
+               std::invalid_argument) << "A too short string should be rejected.";
+  EXPECT_THROW(Philox4x32_10::state_from_string(state, valid + "0"),
+               std::invalid_argument) << "A too long string should be rejected.";
+
+  std::string bad_prefix = valid;
+  bad_prefix[6] = 'X';
+  EXPECT_THROW(Philox4x32_10::state_from_string(state, bad_prefix),
+               std::invalid_argument) << "The Philox_ prefix should be required.";
+
+  for (int sep_pos : {23, 40, 57}) {
+    std::string bad_sep = valid;
+    bad_sep[sep_pos] = '0';
+    EXPECT_THROW(Philox4x32_10::state_from_string(state, bad_sep),
+                 std::invalid_argument) << "The separator at " << sep_pos << " should be checked.";
+  }
+
+  std::string bad_digit = valid;
+  bad_digit[7] = 'G';
+  EXPECT_THROW(Philox4x32_10::state_from_string(state, bad_digit),
+               std::invalid_argument) << "'G' is not a hexadecimal digit.";
+
+  std::string bad_phase = valid;
+  bad_phase[58] = '4';
+  EXPECT_THROW(Philox4x32_10::state_from_string(state, bad_phase),
+               std::invalid_argument) << "Only phases 0..3 are valid.";
 }
 
 }  // namespace test

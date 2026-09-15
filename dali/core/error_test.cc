@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 #include "dali/core/dynlink_cuda.h"
 #include "dali/core/cuda_error.h"
+#include "dali/core/error_handling.h"
 
 namespace dali {
 
@@ -73,6 +74,22 @@ TEST(Error, CudaAlloc) {
   void *mem = nullptr;
   size_t sz = 1_uz << 62;
   EXPECT_THROW(CUDA_CALL(cudaMalloc(&mem, sz)), CUDABadAlloc);
+}
+
+TEST(Error, LastError) {
+  DALIGetLastError();  // start from a clean slate, whatever ran before
+
+  DALISetLastError("Something went wrong");
+  DALIAppendToLastError(" - and here's why");
+  EXPECT_EQ(DALIGetLastError(), "Something went wrong - and here's why");
+  EXPECT_EQ(DALIGetLastError(), "") << "Reading the last error should clear it.";
+
+  DALISetLastError("stale");
+  DALISetLastError("current");
+  EXPECT_EQ(DALIGetLastError(), "current") << "Setting the error should overwrite the old one.";
+
+  DALIAppendToLastError("appended to an empty error");
+  EXPECT_EQ(DALIGetLastError(), "appended to an empty error");
 }
 
 }  // namespace dali
