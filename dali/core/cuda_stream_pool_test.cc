@@ -43,7 +43,7 @@ class CUDAStreamPoolTest : public ::testing::Test {
       threads.emplace_back([&]() {
         std::mt19937_64 rng;
         std::uniform_int_distribution<int> dev_dist(0, devices-1);
-        std::uniform_int_distribution<int> release_method(5);
+        std::uniform_int_distribution<int> release_method(0, 4);
         for (int i = 0; i < 10000; i++) {
           int device_id = dev_dist(rng);
           CUDAStreamLease s = pool.Get(device_id);  // not current device (in general)
