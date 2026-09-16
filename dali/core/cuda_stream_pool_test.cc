@@ -15,7 +15,9 @@
 #include <gtest/gtest.h>
 #include <cuda_runtime.h>
 #include <random>
+#include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 #include "dali/core/cuda_error.h"
 #include "dali/core/cuda_stream_pool.h"
@@ -121,6 +123,23 @@ TEST_F(CUDAStreamPoolTest, GetNotBusy) {
     return;
   }
   GTEST_SKIP() << "Weak test - CPU wasn't able to outrun GPU tasks.";
+}
+
+TEST_F(CUDAStreamPoolTest, ErrorPutNullStream) {
+  CUDAStreamPool pool;
+  EXPECT_THROW(pool.Put(CUDAStream()), std::invalid_argument);
+}
+
+TEST_F(CUDAStreamPoolTest, PutWithoutDeviceId) {
+  CUDAStreamPool pool;  // never used for Get, so Put is what initializes it
+  CUDAStream stream = CUDAStream::Create(true, 0);
+  cudaStream_t raw = stream.get();
+  EXPECT_NO_THROW(pool.Put(std::move(stream)));  // device taken from the stream itself
+
+  auto lease = pool.Get(0);
+  EXPECT_EQ(lease.get(), raw) << "The stream should have been returned from the pool.";
+  lease.reset();
+  pool.Purge();
 }
 
 }  // namespace test
