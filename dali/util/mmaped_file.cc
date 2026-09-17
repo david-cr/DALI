@@ -222,7 +222,7 @@ size_t MmapedFileStream::Size() const {
 }
 
 bool MmapedFileStream::ReserveFileMappings(unsigned int num) {
-  if (num + dali_reserved_mv_cnt > dali_max_mv_cnt) {
+  if (static_cast<uint64_t>(num) + dali_reserved_mv_cnt > dali_max_mv_cnt) {
     return false;
   } else {
     dali_reserved_mv_cnt += num;
