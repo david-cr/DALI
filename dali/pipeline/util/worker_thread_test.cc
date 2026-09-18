@@ -18,10 +18,18 @@
 #include <thread>
 
 #include "dali/pipeline/util/worker_thread.h"
+#include "dali/pipeline/util/worker_thread_internal.h"
 
 namespace dali {
 
 namespace test {
+
+TEST(Barrier, ResetSingleParticipant) {
+  detail::Barrier barrier(1);
+  EXPECT_NO_THROW(barrier.Wait(true));
+  // The first wait resets the counter, so the barrier can be used again.
+  EXPECT_NO_THROW(barrier.Wait(true));
+}
 
 TEST(WorkerThread, Destructing) {
   auto wt = CreateWorkerThread(CPU_ONLY_DEVICE_ID, false, "WorkerThread test");
@@ -39,6 +47,22 @@ TEST(WorkerThread, WaitForWorkErrorHandling) {
     wt->WaitForWork();
   } catch (const std::runtime_error &e) {
     EXPECT_EQ(e.what(), std::string("Error in worker thread: Asdf"));
+    return;
+  }
+  FAIL() << "Expected an exception";
+}
+
+TEST(WorkerThread, WaitForWorkUnknownException) {
+  auto wt = CreateWorkerThread(CPU_ONLY_DEVICE_ID, false, "WorkerThread test");
+  ASSERT_TRUE(wt->WaitForInit());
+  wt->DoWork([]() {
+    throw 42;
+  });
+  try {
+    wt->WaitForWork();
+  } catch (const std::runtime_error &e) {
+    EXPECT_EQ(e.what(), std::string(
+        "Error in worker thread: Caught unknown exception in thread."));
     return;
   }
   FAIL() << "Expected an exception";
