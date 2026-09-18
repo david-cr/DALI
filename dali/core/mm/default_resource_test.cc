@@ -13,11 +13,15 @@
 // limitations under the License.
 
 #include <gtest/gtest.h>
+#include <array>
+#include <cstdlib>
+#include <string>
 #include <vector>
 #include <thread>
 #include "dali/core/mm/default_resources.h"
 #include "dali/core/mm/detail/align.h"
 #include "dali/core/mm/malloc_resource.h"
+#include "dali/core/mm/binning_resource.h"
 #include "dali/core/cuda_stream.h"
 #include "dali/core/cuda_event.h"
 #include "dali/core/cuda_error.h"
@@ -213,6 +217,39 @@ TEST(MMDefaultResource, SetResource_Pinned) {
 
 TEST(MMDefaultResource, SetResource_Device) {
   TestSetDefaultResource<memory_kind::device>();
+}
+
+TEST(MMDefaultResource, SetOwnedResource_Host) {
+  auto *resource = new DummyResource<memory_kind::host>;
+  SetDefaultResource<memory_kind::host>(resource, true);
+  EXPECT_EQ(GetDefaultResource<memory_kind::host>(), resource);
+  SetDefaultResource<memory_kind::host>(nullptr);
+}
+
+TEST(MMDefaultResource, ConfigError) {
+  const char *expected = std::getenv("DALI_TEST_EXPECT_MM_CONFIG_ERROR");
+  if (!expected)
+    GTEST_SKIP() << "Run only by the dedicated VectorCAST configuration variants.";
+
+  try {
+    (void)GetDefaultResource<memory_kind::host>();
+  } catch (const std::exception &e) {
+    EXPECT_NE(std::string(e.what()).find(expected), std::string::npos);
+    return;
+  }
+  GTEST_FAIL() << "Expected invalid memory configuration to be rejected.";
+}
+
+TEST(MMDefaultResource, ReleaseUnusedHostBinning) {
+  DummyResource<memory_kind::host> small, large;
+  std::array<size_t, 1> split_points = {{1024}};
+  std::array<host_memory_resource *, 2> resources = {{&small, &large}};
+  auto binning = std::make_shared<binning_resource<memory_kind::host>>(
+      split_points, resources);
+
+  SetDefaultResource<memory_kind::host>(binning);
+  EXPECT_NO_THROW(ReleaseUnusedMemory());
+  SetDefaultResource<memory_kind::host>(nullptr);
 }
 
 TEST(MMDefaultResource, SetResource_MultiGPU) {

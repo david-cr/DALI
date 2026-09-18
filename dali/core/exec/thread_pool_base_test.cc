@@ -366,6 +366,17 @@ TYPED_TEST(NewThreadPoolJobTest, WaitEmptyJobWithoutRun) {
   EXPECT_TRUE(job.WaitCompleted());
 }
 
+TYPED_TEST(NewThreadPoolJobTest, RunEmptyJob) {
+  ThreadPoolBase tp(2);
+  TypeParam job;
+  // Running an empty job is also legal. There is no batch to submit and `wait` must not invoke
+  // Wait, because there is nothing to wait for.
+  EXPECT_NO_THROW(job.Run(tp, true));
+  EXPECT_TRUE(job.Started());
+  EXPECT_FALSE(job.WaitStarted());
+  EXPECT_FALSE(job.WaitCompleted());
+}
+
 TYPED_TEST(NewThreadPoolJobTest, ErrorDiscardAfterRun) {
   ThreadPoolBase tp(4);
   TypeParam job;

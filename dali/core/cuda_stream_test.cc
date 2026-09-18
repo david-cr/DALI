@@ -19,6 +19,17 @@
 
 namespace dali {
 
+TEST(CUDAStream, CreateBlocking) {
+  CUDAStream stream = CUDAStream::Create(false, 0);
+  ASSERT_TRUE(stream);
+
+  unsigned int flags = cudaStreamNonBlocking;
+  CUDA_CALL(cudaStreamGetFlags(stream, &flags));
+  EXPECT_EQ(flags, cudaStreamDefault);
+  EXPECT_EQ(DeviceFromStream(stream), 0);
+  CUDA_CALL(cudaStreamSynchronize(stream));
+}
+
 TEST(CUDAStream, CreateWithPriority) {
   int least_priority = 0, greatest_priority = 0;
   CUDA_CALL(cudaDeviceGetStreamPriorityRange(&least_priority, &greatest_priority));

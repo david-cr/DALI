@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 #include <cuda_runtime.h>
+#include <atomic>
 #include <random>
 #include <stdexcept>
 #include <thread>
@@ -123,6 +124,35 @@ TEST_F(CUDAStreamPoolTest, GetNotBusy) {
     return;
   }
   GTEST_SKIP() << "Weak test - CPU wasn't able to outrun GPU tasks.";
+}
+
+TEST_F(CUDAStreamPoolTest, GetCompletedBusyStream) {
+  struct Blocker {
+    std::atomic_bool entered{false};
+    std::atomic_bool release{false};
+  } blocker;
+
+  CUDAStreamPool pool;
+  auto lease = pool.Get(0);
+  cudaStream_t raw = lease.get();
+  CUDA_CALL(cudaLaunchHostFunc(raw, [](void *arg) {
+    auto &blocker = *static_cast<Blocker *>(arg);
+    blocker.entered = true;
+    while (!blocker.release)
+      std::this_thread::yield();
+  }, &blocker));
+
+  while (!blocker.entered)
+    std::this_thread::yield();
+  lease.reset();  // the blocked stream goes to the busy list
+
+  blocker.release = true;
+  CUDA_CALL(cudaStreamSynchronize(raw));
+
+  auto reused = pool.Get(0);  // the completed stream is recovered from the busy list
+  EXPECT_EQ(reused.get(), raw);
+  reused.reset();
+  pool.Purge();
 }
 
 TEST_F(CUDAStreamPoolTest, ErrorPutNullStream) {

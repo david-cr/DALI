@@ -50,6 +50,7 @@ int ClosedFd() {
 
 TEST(SharedMem, DirExists) {
   EXPECT_TRUE(detail::dir_exists("/"));
+  EXPECT_FALSE(detail::dir_exists("/dev/null")) << "An existing non-directory is not a directory.";
   EXPECT_FALSE(detail::dir_exists("/no/such/directory/here"));
 }
 
@@ -87,6 +88,17 @@ TEST(SharedMem, CreateFromExistingHandle) {
   SharedMem attached(dup_fd, kPageSize);  // takes over dup_fd instead of allocating new memory
   EXPECT_EQ(attached.size(), kPageSize);
   EXPECT_EQ(attached.get_raw_ptr()[0], 42) << "Both objects should map the same memory.";
+}
+
+TEST(SharedMem, ResizeMappedMemory) {
+  SharedMem sm(-1, kPageSize);
+  ASSERT_NE(sm.get_raw_ptr(), nullptr);
+  sm.get_raw_ptr()[0] = 42;
+
+  ASSERT_NO_THROW(sm.resize(2 * kPageSize, true));
+  EXPECT_EQ(sm.size(), 2 * kPageSize);
+  ASSERT_NE(sm.get_raw_ptr(), nullptr);
+  EXPECT_EQ(sm.get_raw_ptr()[0], 42) << "mremap should preserve the original contents.";
 }
 
 TEST(SharedMem, ErrorTruncateOnCreate) {
