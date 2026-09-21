@@ -2137,6 +2137,59 @@ TEST_F(TensorListVariableBatchSizeTest, UpdatePropertiesFromSamples) {
     tl.tensor_handle(1).Resize({3, 4}, DALI_FLOAT);  // non-empty reference, dim 2
     EXPECT_NO_THROW(tl.UpdatePropertiesFromSamples(false));
   }
+
+  // Per-sample operators must not return an empty batch.
+  {
+    TensorList<CPUBackend> tl;
+    EXPECT_THROW(tl.UpdatePropertiesFromSamples(false), DALIException);
+  }
+
+  // A list marked contiguous cannot have a non-empty sample with no data.
+  {
+    TensorList<CPUBackend> tl;
+    tl.Resize({{3}}, DALI_FLOAT);
+    tl.tensor_handle(0).Reset();
+    EXPECT_THROW(tl.UpdatePropertiesFromSamples(true), DALIException);
+  }
+
+  // Empty samples inherit allocation properties from the first non-empty sample.
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(0).set_pinned(false);
+    tl.tensor_handle(0).Resize({3}, DALI_FLOAT);
+    tl.tensor_handle(1).set_pinned(true);
+    tl.tensor_handle(1).Resize({0}, DALI_FLOAT);
+
+    EXPECT_NO_THROW(tl.UpdatePropertiesFromSamples(false));
+    EXPECT_FALSE(tl.tensor_handle(1).is_pinned());
+    EXPECT_EQ(tl.tensor_handle(1).type(), DALI_FLOAT);
+  }
+
+  // Growing a typed list without a known sample dimensionality initializes the
+  // reintroduced samples with the batch type but does not allocate them.
+  {
+    TensorList<CPUBackend> tl;
+    tl.set_type(DALI_FLOAT);
+    tl.resize_tensors(1);
+    EXPECT_EQ(tl.tensor_handle(0).type(), DALI_FLOAT);
+    EXPECT_FALSE(tl.tensor_handle(0).has_data());
+  }
+
+  // A stale out-of-scope allocation with incompatible pinning is discarded when
+  // the sample is brought back into the active batch.
+  {
+    TensorList<CPUBackend> tl(2);
+    tl.tensor_handle(1).set_pinned(false);
+    tl.tensor_handle(1).Resize({1}, DALI_UINT8);
+    ASSERT_TRUE(tl.tensor_handle(1).has_data());
+
+    tl.resize_tensors(1);
+    tl.pinned_ = true;
+    tl.resize_tensors(2);
+
+    EXPECT_FALSE(tl.tensor_handle(1).has_data());
+    EXPECT_TRUE(tl.tensor_handle(1).is_pinned());
+  }
 }
 
 TEST(TensorList, ResizeOverheadPerf) {
