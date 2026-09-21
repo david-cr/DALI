@@ -686,12 +686,19 @@ class DummyOpToAdd : public Operator<CPUBackend> {
 };
 
 DALI_REGISTER_OPERATOR(DummyOpToAdd, DummyOpToAdd, CPU);
+DALI_REGISTER_OPERATOR(DummyUnserializableOp, DummyOpToAdd, CPU);
 
 DALI_SCHEMA(DummyOpToAdd)
   .DocStr("DummyOpToAdd")
   .NumInput(1)
   .NumOutput(1)
   .AddRandomSeedArg();
+
+DALI_SCHEMA(DummyUnserializableOp)
+  .DocStr("DummyUnserializableOp")
+  .NumInput(1)
+  .NumOutput(1)
+  .Unserializable();
 
 TEST(PipelineTest, AddOperator) {
   Pipeline pipe(10, 4, 0);
@@ -728,9 +735,32 @@ TEST(PipelineTest, AddOperator) {
   ASSERT_TRUE(pipe.IsLogicalIdUsed(first_op));
   ASSERT_TRUE(pipe.IsLogicalIdUsed(second_op));
   ASSERT_TRUE(pipe.IsLogicalIdUsed(third_op));
+  ASSERT_FALSE(pipe.IsLogicalIdUsed(third_op + 1000));
   ASSERT_EQ(pipe.GetOperatorNode("first_op")->spec.GetArgument<int64_t>("seed"),
             pipe.GetOperatorNode("second_op")->spec.GetArgument<int64_t>("seed"));
   ASSERT_EQ(pipe.GetOperatorNode("third_op")->spec.GetArgument<int64_t>("seed"), 0xDEADBEEF);
+}
+
+TEST(PipelineTest, AddNullOperatorInstance) {
+  Pipeline pipe(1, 1, 0);
+  EXPECT_THROW(
+      pipe.AddOperatorInstance(OpSpec("Copy"), "null_op", nullptr, 0),
+      DALIException);
+}
+
+TEST(PipelineTest, AddMismatchedOperatorInstance) {
+  Pipeline pipe(1, 1, 0);
+  auto instantiated_spec = OpSpec("DummyOpToAdd")
+      .AddArg("device", "cpu")
+      .AddArg("max_batch_size", 1)
+      .AddArg("num_threads", 1)
+      .AddInput("data", StorageDevice::CPU)
+      .AddOutput("out", StorageDevice::CPU);
+  auto op = InstantiateOperator(instantiated_spec);
+
+  EXPECT_THROW(
+      pipe.AddOperatorInstance(OpSpec("Copy"), "mismatched_op", std::move(op), 0),
+      DALIException);
 }
 
 TEST(PipelineTest, InputsListing) {
@@ -3728,8 +3758,15 @@ TEST_F(PipelineTestOnce, TestSerializationNonSerializableOperator) {
   std::string serialized = pipe.SerializeToProtobuf();
   EXPECT_FALSE(serialized.empty());
 
-  // Note: Testing non-serializable operators would require adding one that
-  // explicitly has IsSerializable() = false in its schema, which is rare
+  Pipeline unserializable_pipe(1, 1, 0);
+  unserializable_pipe.AddExternalInput("data");
+  unserializable_pipe.AddOperator(
+      OpSpec("DummyUnserializableOp")
+          .AddArg("device", "cpu")
+          .AddInput("data", StorageDevice::CPU)
+          .AddOutput("out", StorageDevice::CPU));
+
+  EXPECT_THROW(unserializable_pipe.SerializeToProtobuf(), DALIException);
 }
 
 // Test GetOperator() before Build() validation (lines 916-917)
