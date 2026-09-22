@@ -665,6 +665,30 @@ TEST(Graph2DotTest, EmptyGraph) {
   EXPECT_NE(dot.find("}"), std::string::npos);
 }
 
+TEST(Graph2DotTest, InvalidOpTypeAndNullConsumer) {
+  OpSpec spec("dummy");
+  spec.AddArg("device", "cpu");
+  spec.AddOutput("output", StorageDevice::CPU);
+
+  OpGraph::Builder b;
+  b.Add("invalid_op", spec);
+  b.AddOutput("output_cpu");
+  OpGraph g = std::move(b).GetGraph();
+
+  auto *op = g.GetOp("invalid_op");
+  auto *output = g.GetData("output_cpu");
+  ASSERT_NE(op, nullptr);
+  ASSERT_NE(output, nullptr);
+
+  op->op_type = OpType::COUNT;
+  output->consumers.push_back({});
+
+  std::ostringstream os;
+  GenerateDOTFromGraph(os, g, false, true);
+
+  EXPECT_NE(os.str().find("invalid_op[color=\"black\"]"), std::string::npos);
+}
+
 }  // namespace test
 }  // namespace graph
 }  // namespace dali
