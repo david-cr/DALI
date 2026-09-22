@@ -201,5 +201,58 @@ TEST(OperatorBatchSize, MismatchedOutputBatchSize) {
   EXPECT_THROW(op.EnforceUniformOutputBatchSize(ws), std::runtime_error);
 }
 
+TEST(OperatorMetadata, MismatchedInputCount) {
+  auto spec = MakeOpSpec("Copy");
+  spec.AddInput("input", StorageDevice::CPU);
+
+  Workspace ws;
+  EXPECT_THROW(ValidateInputMetadata(ws, spec), std::invalid_argument);
+}
+
+TEST(OperatorMetadata, MismatchedOutputCount) {
+  auto spec = MakeOpSpec("Copy");
+  spec.AddOutput("output", StorageDevice::CPU);
+
+  Workspace ws;
+  EXPECT_THROW(ValidateOutputMetadata(ws, spec), std::invalid_argument);
+}
+
+TEST(OperatorMetadata, MismatchedInputDimensionality) {
+  auto spec = MakeOpSpec("Copy");
+  spec.AddInput("input", StorageDevice::CPU, 2);
+
+  auto input = std::make_shared<TensorList<CPUBackend>>();
+  input->Resize({{1, 2, 3}}, DALI_FLOAT);
+  Workspace ws;
+  ws.AddInput(input);
+
+  EXPECT_THROW(ValidateInputMetadata(ws, spec), std::invalid_argument);
+}
+
+TEST(OperatorMetadata, MismatchedInputType) {
+  auto spec = MakeOpSpec("Copy");
+  spec.AddInput("input", StorageDevice::CPU, 2, DALI_UINT8);
+
+  auto input = std::make_shared<TensorList<CPUBackend>>();
+  input->Resize({{1, 2}}, DALI_FLOAT);
+  Workspace ws;
+  ws.AddInput(input);
+
+  EXPECT_THROW(ValidateInputMetadata(ws, spec), std::invalid_argument);
+}
+
+TEST(OperatorMetadata, MismatchedInputLayout) {
+  auto spec = MakeOpSpec("Copy");
+  spec.AddInput("input", StorageDevice::CPU, 2, DALI_FLOAT, "HW");
+
+  auto input = std::make_shared<TensorList<CPUBackend>>();
+  input->Resize({{1, 2}}, DALI_FLOAT);
+  input->SetLayout("CH");
+  Workspace ws;
+  ws.AddInput(input);
+
+  EXPECT_THROW(ValidateInputMetadata(ws, spec), std::invalid_argument);
+}
+
 }  // namespace testing
 }  // namespace dali
