@@ -13,10 +13,12 @@
 // limitations under the License.
 
 #include <string>
+#include <string_view>
 #include "dali/pipeline/executor/executor2/exec2_test.h"
 #include "dali/pipeline/operator/arg_helper.h"
 #include "dali/pipeline/executor/executor2/exec_graph.h"
 #include "dali/pipeline/graph/op_graph2.h"
+#include "dali/pipeline/operator/batch_size_provider.h"
 #include "dali/test/timing.h"
 #include "dali/core/cuda_stream_pool.h"
 
@@ -40,6 +42,66 @@ void SetOutputDevice(ExecNode *node, size_t out_idx, StorageDevice device) {
   if (node->outputs.size() <= out_idx)
     node->outputs.resize(out_idx + 1);
   node->outputs[out_idx].device = device;
+}
+
+struct ValidationGraph {
+  explicit ValidationGraph(int consumer_inputs = 1, int consumer_outputs = 2) {
+    OpSpec producer_spec(kTestOpName);
+    producer_spec.AddArg("addend", 1)
+        .AddArg("num_threads", 1)
+        .AddArg("device", "cpu")
+        .AddArg("max_batch_size", 1)
+        .AddOutput("producer_out", StorageDevice::CPU)
+        .AddArg("name", "producer");
+
+    OpSpec consumer_spec(kTestOpName);
+    consumer_spec.AddArg("addend", 1)
+        .AddArg("num_threads", 1)
+        .AddArg("device", "cpu")
+        .AddArg("max_batch_size", 1)
+        .AddArg("name", "consumer");
+    for (int i = 0; i < consumer_inputs; i++)
+      consumer_spec.AddInput(make_string("consumer_in_", i), StorageDevice::CPU);
+    for (int i = 0; i < consumer_outputs; i++)
+      consumer_spec.AddOutput(make_string("consumer_out_", i), StorageDevice::CPU);
+
+    producer = graph.AddNode(std::make_unique<DummyOpCPU>(producer_spec));
+    consumer = graph.AddNode(std::make_unique<DummyOpCPU>(consumer_spec));
+    output = graph.AddOutputNode();
+    input_edge = graph.Link(producer, 0, consumer, 0);
+    output_edge = graph.Link(consumer, 0, output, 0);
+  }
+
+  ExecGraph graph;
+  ExecNode *producer = nullptr;
+  ExecNode *consumer = nullptr;
+  ExecNode *output = nullptr;
+  ExecEdge *input_edge = nullptr;
+  ExecEdge *output_edge = nullptr;
+};
+
+class DummyBatchSizeProvider : public DummyOpCPU, public BatchSizeProvider {
+ public:
+  using DummyOpCPU::DummyOpCPU;
+
+  int NextBatchSize() override {
+    return 1;
+  }
+
+  void Advance() override {}
+};
+
+void ExpectValidationError(ExecGraph &graph, std::string_view expected) {
+  WorkspaceParams params = {};
+  params.max_batch_size = 1;
+  params.iter_data = std::make_shared<IterationData>();
+  try {
+    graph.PrepareIteration(params);
+  } catch (const std::logic_error &e) {
+    EXPECT_NE(std::string(e.what()).find(expected), std::string::npos);
+    return;
+  }
+  FAIL() << "Expected graph validation to fail.";
 }
 }  // namespace
 
@@ -1363,6 +1425,117 @@ TEST(ExecGraphTest, PassThroughOperatorSkipAlreadyPinned) {
   ASSERT_EQ(ws.NumOutput(), 2);
   ASSERT_TRUE(ws.has_event());
   AccessOrder::host().wait(ws.event());
+}
+
+TEST(ExecGraphValidationTest, ProducerOutputIndexOutOfRange) {
+  ValidationGraph g;
+  g.input_edge->producer_output_idx = g.producer->outputs.size();
+  ExpectValidationError(g.graph, "producer output index is out of range");
+}
+
+TEST(ExecGraphValidationTest, ProducerOutputMissingEdge) {
+  ValidationGraph g;
+  g.producer->outputs[0].consumers.clear();
+  ExpectValidationError(g.graph, "producer's output doesn't have this edge");
+}
+
+TEST(ExecGraphValidationTest, ConsumerInputSlotMismatch) {
+  ValidationGraph g;
+  g.consumer->inputs[0] = g.output_edge;
+  ExpectValidationError(g.graph, "inconsistent edge consumer");
+}
+
+TEST(ExecGraphValidationTest, InputCountMismatch) {
+  ValidationGraph g;
+  g.consumer->inputs.emplace_back(g.input_edge);
+  ExpectValidationError(g.graph, "different number of inputs");
+}
+
+TEST(ExecGraphValidationTest, OutputCountMismatch) {
+  ValidationGraph g;
+  g.consumer->outputs.emplace_back();
+  ExpectValidationError(g.graph, "different number of outputs");
+}
+
+TEST(ExecGraphValidationTest, UnknownOutputEdge) {
+  ValidationGraph g;
+  ExecEdge unknown_edge;
+  g.producer->outputs[0].consumers.push_back(&unknown_edge);
+  ExpectValidationError(g.graph, "output is not a known edge pointer");
+}
+
+TEST(ExecGraphValidationTest, OutputEdgePointsToAnotherProducer) {
+  ValidationGraph g;
+  g.consumer->outputs[1].consumers.push_back(g.input_edge);
+  ExpectValidationError(g.graph, "producer should always point to self");
+}
+
+TEST(ExecGraphValidationTest, OutputEdgeIndexMismatch) {
+  ValidationGraph g;
+  g.consumer->outputs[1].consumers.push_back(g.output_edge);
+  ExpectValidationError(g.graph, "output's index must match");
+}
+
+TEST(ExecGraphValidationTest, UnknownInputEdge) {
+  ValidationGraph g(2);
+  ExecEdge unknown_edge;
+  unknown_edge.producer = g.producer;
+  g.consumer->inputs[1] = &unknown_edge;
+  ExpectValidationError(g.graph, "output is not a known edge pointer");
+}
+
+TEST(ExecGraphValidationTest, InputEdgePointsToAnotherConsumer) {
+  ValidationGraph g(2);
+  g.consumer->inputs[1] = g.output_edge;
+  ExpectValidationError(g.graph, "input's consumer should always point to self");
+}
+
+TEST(ExecGraphValidationTest, InputEdgeIndexMismatch) {
+  ValidationGraph g(2);
+  g.consumer->inputs[1] = g.input_edge;
+  ExpectValidationError(g.graph, "input index must match");
+}
+
+TEST(ExecGraphValidationTest, PipelineOutputFlagOnNonLastNode) {
+  ValidationGraph g;
+  OpSpec trailing_spec(kTestOpName);
+  trailing_spec.AddArg("addend", 1)
+      .AddArg("num_threads", 1)
+      .AddArg("device", "cpu")
+      .AddArg("max_batch_size", 1)
+      .AddInput("pipeline_output", StorageDevice::CPU)
+      .AddOutput("trailing_output", StorageDevice::CPU)
+      .AddArg("name", "trailing");
+  auto *trailing = g.graph.AddNode(std::make_unique<DummyOpCPU>(trailing_spec));
+  g.graph.Link(g.output, 0, trailing, 0);
+  ExpectValidationError(g.graph, "exactly one output node");
+}
+
+TEST(ExecGraphValidationTest, BatchSizeProviderHasInput) {
+  OpSpec producer_spec(kTestOpName);
+  producer_spec.AddArg("addend", 1)
+      .AddArg("num_threads", 1)
+      .AddArg("device", "cpu")
+      .AddArg("max_batch_size", 1)
+      .AddOutput("producer_out", StorageDevice::CPU)
+      .AddArg("name", "producer");
+
+  OpSpec provider_spec(kTestOpName);
+  provider_spec.AddArg("addend", 1)
+      .AddArg("num_threads", 1)
+      .AddArg("device", "cpu")
+      .AddArg("max_batch_size", 1)
+      .AddInput("provider_in", StorageDevice::CPU)
+      .AddOutput("provider_out", StorageDevice::CPU)
+      .AddArg("name", "provider");
+
+  ExecGraph graph;
+  auto *producer = graph.AddNode(std::make_unique<DummyOpCPU>(producer_spec));
+  auto *provider = graph.AddNode(std::make_unique<DummyBatchSizeProvider>(provider_spec));
+  auto *output = graph.AddOutputNode();
+  graph.Link(producer, 0, provider, 0);
+  graph.Link(provider, 0, output, 0);
+  ExpectValidationError(graph, "batch size provider cannot have inputs");
 }
 
 }  // namespace test
