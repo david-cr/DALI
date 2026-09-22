@@ -552,6 +552,24 @@ TEST(ExecGraphTest, LoweredStructureMatch) {
   EXPECT_EQ(ex_out.inputs[1]->producer, &ex2);
 }
 
+TEST(ExecGraphTest, LowerRejectsUnknownTransferredOperator) {
+  graph::OpGraph def = GetTestGraph1();
+  OperatorMap transferred_ops;
+  transferred_ops.emplace("orphan", nullptr);
+
+  ExecGraph g;
+  try {
+    g.Lower(def, std::move(transferred_ops));
+  } catch (const DALIException &e) {
+    EXPECT_NE(
+        std::string(e.what()).find(
+            "Transferred operator instance \"orphan\" was not found in the pipeline graph"),
+        std::string::npos);
+    return;
+  }
+  FAIL() << "Expected an unknown transferred operator to be rejected.";
+}
+
 TEST(ExecGraphTest, LoweredExec) {
   graph::OpGraph def = GetTestGraph1();
   ExecGraph g;
