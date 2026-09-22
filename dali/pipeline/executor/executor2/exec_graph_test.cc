@@ -82,13 +82,24 @@ struct ValidationGraph {
 
 class DummyBatchSizeProvider : public DummyOpCPU, public BatchSizeProvider {
  public:
-  using DummyOpCPU::DummyOpCPU;
+  explicit DummyBatchSizeProvider(
+      const OpSpec &spec, int next_batch_size = 1, bool throw_on_advance = false)
+      : DummyOpCPU(spec)
+      , next_batch_size_(next_batch_size)
+      , throw_on_advance_(throw_on_advance) {}
 
   int NextBatchSize() override {
-    return 1;
+    return next_batch_size_;
   }
 
-  void Advance() override {}
+  void Advance() override {
+    if (throw_on_advance_)
+      throw std::runtime_error("advance failed");
+  }
+
+ private:
+  int next_batch_size_ = 1;
+  bool throw_on_advance_ = false;
 };
 
 void ExpectValidationError(ExecGraph &graph, std::string_view expected) {
@@ -102,6 +113,31 @@ void ExpectValidationError(ExecGraph &graph, std::string_view expected) {
     return;
   }
   FAIL() << "Expected graph validation to fail.";
+}
+
+ExecNode *AddBatchSizeProvider(
+    ExecGraph &graph, int next_batch_size, bool throw_on_advance = false) {
+  OpSpec spec(kTestOpName);
+  spec.AddArg("addend", 1)
+      .AddArg("num_threads", 1)
+      .AddArg("device", "cpu")
+      .AddArg("max_batch_size", 1)
+      .AddOutput("provider_out", StorageDevice::CPU)
+      .AddArg("name", "provider");
+  return graph.AddNode(
+      std::make_unique<DummyBatchSizeProvider>(spec, next_batch_size, throw_on_advance));
+}
+
+void ExpectBatchSizeError(ExecGraph &graph, int max_batch_size) {
+  WorkspaceParams params = {};
+  params.max_batch_size = max_batch_size;
+  params.iter_data = std::make_shared<IterationData>();
+  graph.PrepareIteration(params);
+
+  tasking::Executor executor(1);
+  executor.Start();
+  auto future = graph.Launch(executor);
+  EXPECT_THROW(future.Value<const PipelineOutput &>(), std::runtime_error);
 }
 }  // namespace
 
@@ -1536,6 +1572,57 @@ TEST(ExecGraphValidationTest, BatchSizeProviderHasInput) {
   graph.Link(producer, 0, provider, 0);
   graph.Link(provider, 0, output, 0);
   ExpectValidationError(graph, "batch size provider cannot have inputs");
+}
+
+TEST(ExecGraphErrorTest, PrepareEmptyGraph) {
+  ExecGraph graph;
+  WorkspaceParams params = {};
+  params.max_batch_size = 1;
+  EXPECT_THROW(graph.PrepareIteration(params), std::logic_error);
+}
+
+TEST(ExecGraphErrorTest, PrepareInvalidMaxBatchSize) {
+  ValidationGraph g;
+  WorkspaceParams params = {};
+  params.max_batch_size = 0;
+  EXPECT_THROW(g.graph.PrepareIteration(params), std::runtime_error);
+}
+
+TEST(ExecGraphErrorTest, LaunchBeforePrepare) {
+  ValidationGraph g;
+  tasking::Executor executor(1);
+  executor.Start();
+  EXPECT_THROW(g.graph.Launch(executor), std::logic_error);
+}
+
+TEST(ExecGraphErrorTest, BatchSizeTooLarge) {
+  ExecGraph graph;
+  auto *provider = AddBatchSizeProvider(graph, 2);
+  auto *output = graph.AddOutputNode();
+  ASSERT_TRUE(provider->is_batch_size_provider);
+  graph.Link(provider, 0, output, 0);
+  ExpectBatchSizeError(graph, 1);
+}
+
+TEST(ExecGraphErrorTest, BatchSizeMismatch) {
+  ExecGraph graph;
+  auto *provider0 = AddBatchSizeProvider(graph, 1);
+  auto *provider1 = AddBatchSizeProvider(graph, 2);
+  auto *output = graph.AddOutputNode();
+  ASSERT_TRUE(provider0->is_batch_size_provider);
+  ASSERT_TRUE(provider1->is_batch_size_provider);
+  graph.Link(provider0, 0, output, 0);
+  graph.Link(provider1, 0, output, 1);
+  ExpectBatchSizeError(graph, 2);
+}
+
+TEST(ExecGraphErrorTest, BatchSizeProviderAdvanceError) {
+  ExecGraph graph;
+  auto *provider = AddBatchSizeProvider(graph, 1, true);
+  auto *output = graph.AddOutputNode();
+  ASSERT_TRUE(provider->is_batch_size_provider);
+  graph.Link(provider, 0, output, 0);
+  ExpectBatchSizeError(graph, 1);
 }
 
 }  // namespace test
