@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "dali/test/dali_test.h"
@@ -540,6 +541,20 @@ TEST_F(CheckpointTest, DeserializeUnrecognizedOperator) {
   Checkpoint deserialized;
   EXPECT_THROW(deserialized.DeserializeFromProtobuf(*exec2, serialized),
                std::runtime_error);
+}
+
+TEST_F(CheckpointTest, DeserializeInvalidProtobuf) {
+  Checkpoint checkpoint;
+  checkpoint.AddOperator("stale");
+  checkpoint.SetIterationId(42);
+  auto exec = GetSimpleExecutor();
+
+  const std::string truncated_message(1, '\x0a');
+  EXPECT_THROW(
+      checkpoint.DeserializeFromProtobuf(*exec, truncated_message),
+      DALIException);
+  EXPECT_EQ(checkpoint.NumOp(), 0);
+  EXPECT_EQ(checkpoint.GetIterationId(), 0);
 }
 
 // Test OpCheckpoint::SetOrder with empty AccessOrder (covers op_checkpoint.cc line 35)
