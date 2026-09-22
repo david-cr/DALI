@@ -5396,6 +5396,8 @@ class DummyMixedInputOperator : public InputOperator<MixedBackend> {
  public:
   explicit DummyMixedInputOperator(const OpSpec &spec) : InputOperator<MixedBackend>(spec) {}
 
+  using InputOperator<MixedBackend>::ForwardCurrentData;
+
   bool SetupImpl(std::vector<OutputDesc> &output_desc, const Workspace &ws) override {
     return false;
   }
@@ -5423,6 +5425,35 @@ DALI_SCHEMA(DummyMixedInputOperator)
   .DocStr("DummyMixedInputOperator")
   .NumInput(0)
   .NumOutput(1);
+
+TEST_F(PipelineTestOnce, TestMixedInputForwardsBySwap) {
+  auto spec = OpSpec("DummyMixedInputOperator")
+                  .AddArg("device", "mixed")
+                  .AddArg("device_id", 0)
+                  .AddArg("max_batch_size", 1)
+                  .AddArg("num_threads", 1)
+                  .AddArg("blocking", false)
+                  .AddArg("no_copy", true)
+                  .AddOutput("mixed_out", StorageDevice::GPU);
+  DummyMixedInputOperator op(spec);
+
+  TensorList<CPUBackend> source;
+  source.set_pinned(false);
+  source.Resize({{1}}, DALI_INT32);
+  source.mutable_tensor<int>(0)[0] = 42;
+  op.SetDataSource(source, AccessOrder::host(), {}, std::string("batch"));
+
+  TensorList<CPUBackend> target;
+  target.set_pinned(false);
+  std::optional<std::string> data_id;
+  OldThreadPool thread_pool(1, 0, false, "mixed-input-test");
+  op.ForwardCurrentData(target, data_id, thread_pool);
+
+  ASSERT_TRUE(data_id.has_value());
+  EXPECT_EQ(*data_id, "batch");
+  ASSERT_EQ(target.num_samples(), 1);
+  EXPECT_EQ(target.tensor<int>(0)[0], 42);
+}
 
 // The input accessors dispatch on the operator's backend; check the mixed one.
 TEST_F(PipelineTestOnce, TestInputAccessorsMixedBackend) {
