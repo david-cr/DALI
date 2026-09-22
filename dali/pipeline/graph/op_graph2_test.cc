@@ -17,6 +17,7 @@
 #include "dali/core/int_literals.h"
 #include "dali/pipeline/graph/op_graph2.h"
 #include "dali/pipeline/graph/graph2dot.h"
+#include "dali/pipeline/graph/node_meta.h"
 
 namespace dali {
 namespace graph {
@@ -47,6 +48,20 @@ TEST(NewOpGraphTest, AddEraseData) {
   EXPECT_EQ(g.GetData("d1"), &data_node);
   EXPECT_TRUE(g.EraseData("d1"));
   EXPECT_EQ(g.GetData("d1"), nullptr);
+}
+
+TEST(NewOpGraphTest, MetadataInputWithoutProducer) {
+  OpSpec spec("dummy");
+  spec.AddArg("device", "cpu");
+  spec.AddInput("external", StorageDevice::CPU);
+  spec.AddOutput("output", StorageDevice::CPU);
+
+  OpGraph::Builder b;
+  b.Add("consumer", spec);
+  b.AddOutput("output_cpu");
+  OpGraph g = std::move(b).GetGraph();
+
+  EXPECT_THROW(ComputeDataNodeMetadata(g), std::logic_error);
 }
 
 TEST(NewOpGraphBuilderTest, AddSingleOp) {
