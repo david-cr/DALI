@@ -288,5 +288,16 @@ TEST_F(MakeContiguousErrorTest, VaryingSampleSizes) {
   EXPECT_EQ(result.type(), DALI_FLOAT);
 }
 
+TEST_F(MakeContiguousErrorTest, RejectsOtherOperators) {
+  auto spec = OpSpec("Copy")
+                  .AddArg("device", "cpu")
+                  .AddArg("max_batch_size", batch_size_)
+                  .AddArg("num_threads", num_threads_);
+  auto copy = InstantiateOperator(spec);
+
+  EXPECT_THROW(MarkPassThrough(*copy), DALIException);
+  EXPECT_THROW(IsPassThrough(*copy), DALIException);
+}
+
 }  // namespace dali
 
