@@ -254,6 +254,29 @@ TEST(Exec2ErrorTest, RestoreEmptyCheckpointInitsIterData) {
   EXPECT_NO_THROW(exec.RestoreStateFromCheckpoint(cpt));
 }
 
+TEST(Exec2ErrorTest, NegativeDeviceIdThrows) {
+  auto cfg = MakeErrCfg();
+  cfg.device = -1;
+  Executor2 exec(cfg);
+  auto graph = GetTestGraph1();
+
+  EXPECT_THROW(exec.Build(graph), std::invalid_argument);
+}
+
+TEST(Exec2CoverageTest, OperatorQueueDepthContributesToPrefetchDepth) {
+  auto spec = OpSpec(kTestOpName)
+                  .AddArg("name", "queued_root")
+                  .AddArg("addend", 1)
+                  .AddArg("queue_depth", 7)
+                  .AddOutput("queued_root_out", StorageDevice::CPU);
+  graph::OpGraph::Builder builder;
+  builder.Add("queued_root", std::move(AddCommonArgs(spec, 1)));
+  builder.AddOutput("queued_root_out_cpu");
+
+  Executor2 exec(MakeErrCfg());
+  EXPECT_NO_THROW(exec.Build(std::move(builder).GetGraph(true)));
+}
+
 
 }  // namespace test
 }  // namespace exec2
