@@ -24,6 +24,15 @@
 
 namespace dali {
 
+DALI_SCHEMA(ExecNodeTaskLayoutConsumer)
+  .NumInput(1)
+  .NumOutput(1)
+  .InputLayout(0, "HWC")
+  .AddArg("addend", "a value added to the input", DALI_INT32, true);
+
+DALI_REGISTER_OPERATOR(
+  ExecNodeTaskLayoutConsumer, exec2::test::DummyOpGPU, GPU);
+
 namespace exec2 {
 namespace test {
 
@@ -100,6 +109,42 @@ class DummyBatchSizeProvider : public DummyOpCPU, public BatchSizeProvider {
  private:
   int next_batch_size_ = 1;
   bool throw_on_advance_ = false;
+};
+
+class Tensor3DSource : public CounterOp {
+ public:
+  using CounterOp::CounterOp;
+
+  bool SetupImpl(std::vector<OutputDesc> &outs, const Workspace &ws) override {
+    outs.resize(1);
+    outs[0].shape = uniform_list_shape(
+      ws.GetRequestedBatchSize(0), TensorShape<3>{1, 1, 1});
+    outs[0].type = DALI_INT32;
+    return true;
+  }
+
+  void RunImpl(Workspace &ws) override {
+    for (int sample = 0; sample < ws.GetRequestedBatchSize(0); sample++)
+      ws.Output<CPUBackend>(0)[sample].mutable_data<int>()[0] = sample;
+  }
+};
+
+class MixedCpuSource : public Operator<MixedBackend> {
+ public:
+  explicit MixedCpuSource(const OpSpec &spec) : Operator<MixedBackend>(spec) {}
+
+  bool SetupImpl(std::vector<OutputDesc> &outs, const Workspace &ws) override {
+    outs.resize(1);
+    outs[0].shape = uniform_list_shape(
+      ws.GetRequestedBatchSize(0), TensorShape<0>{});
+    outs[0].type = DALI_INT32;
+    return true;
+  }
+
+  void RunImpl(Workspace &ws) override {
+    for (int sample = 0; sample < ws.GetRequestedBatchSize(0); sample++)
+      *ws.Output<CPUBackend>(0)[sample].mutable_data<int>() = sample;
+  }
 };
 
 void ExpectValidationError(ExecGraph &graph, std::string_view expected) {
@@ -1641,6 +1686,197 @@ TEST(ExecGraphErrorTest, BatchSizeProviderAdvanceError) {
   ASSERT_TRUE(provider->is_batch_size_provider);
   graph.Link(provider, 0, output, 0);
   ExpectBatchSizeError(graph, 1);
+}
+
+TEST(ExecNodeTaskCoverageTest, SkipsSourceForZeroBatch) {
+  ExecGraph graph;
+  auto *provider = AddBatchSizeProvider(graph, 0);
+  auto *output = graph.AddOutputNode();
+  ASSERT_TRUE(provider->is_batch_size_provider);
+  graph.Link(provider, 0, output, 0);
+
+  WorkspaceParams params = {};
+  params.max_batch_size = 1;
+  params.iter_data = std::make_shared<IterationData>();
+  graph.PrepareIteration(params);
+
+  tasking::Executor executor(1);
+  executor.Start();
+  auto future = graph.Launch(executor);
+  const auto &pipeline_output = future.Value<const PipelineOutput &>();
+
+  ASSERT_EQ(pipeline_output.workspace.NumOutput(), 1);
+  EXPECT_EQ(pipeline_output.workspace.Output<CPUBackend>(0).num_samples(), 0);
+}
+
+TEST(ExecNodeTaskCoverageTest, ResetsDefaultLayoutOnSharedGpuInput) {
+  constexpr int batch_size = 2;
+
+  auto source_spec = OpSpec(kCounterOpName)
+                         .AddArg("device", "cpu")
+                         .AddArg("max_batch_size", batch_size)
+                         .AddArg("num_threads", 1)
+                         .AddArg("name", "source")
+                         .AddOutput("source_out", StorageDevice::CPU);
+  auto contiguous_spec = OpSpec("MakeContiguous")
+                             .AddArg("device", "mixed")
+                             .AddArg("max_batch_size", batch_size)
+                             .AddArg("num_threads", 1)
+                             .AddArg("name", "contiguous")
+                             .AddInput("source_out", StorageDevice::CPU)
+                             .AddOutput("gpu_data", StorageDevice::GPU);
+  auto make_consumer_spec = [batch_size](std::string name, std::string output) {
+    return OpSpec("ExecNodeTaskLayoutConsumer")
+        .AddArg("device", "gpu")
+        .AddArg("max_batch_size", batch_size)
+        .AddArg("num_threads", 1)
+        .AddArg("name", std::move(name))
+        .AddArg("addend", 1)
+        .AddInput("gpu_data", StorageDevice::GPU)
+        .AddOutput(std::move(output), StorageDevice::GPU);
+  };
+
+  ExecGraph graph;
+  auto *source = graph.AddNode(std::make_unique<Tensor3DSource>(source_spec));
+  auto *contiguous = graph.AddNode(InstantiateOperator(contiguous_spec));
+  auto *consumer0 = graph.AddNode(InstantiateOperator(
+      make_consumer_spec("consumer0", "consumer0_out")));
+  auto *consumer1 = graph.AddNode(InstantiateOperator(
+      make_consumer_spec("consumer1", "consumer1_out")));
+  auto *output = graph.AddOutputNode();
+
+  SetOutputDevice(contiguous, 0, StorageDevice::GPU);
+  SetOutputDevice(consumer0, 0, StorageDevice::GPU);
+  SetOutputDevice(consumer1, 0, StorageDevice::GPU);
+  graph.Link(source, 0, contiguous, 0);
+  graph.Link(contiguous, 0, consumer0, 0);
+  graph.Link(contiguous, 0, consumer1, 0);
+  graph.Link(consumer0, 0, output, 0);
+  graph.Link(consumer1, 0, output, 1);
+  LimitBackendConcurrency(graph, OpType::GPU);
+
+  auto stream = CUDAStreamPool::instance().Get();
+  contiguous->env.order = stream;
+  consumer0->env.order = stream;
+  consumer1->env.order = stream;
+  output->env.order = stream;
+
+  OldThreadPool thread_pool(1, 0, false, "layout-reset-test");
+  source->env.thread_pool = &thread_pool;
+
+  WorkspaceParams params = {};
+  params.max_batch_size = batch_size;
+  params.iter_data = std::make_shared<IterationData>();
+  graph.PrepareIteration(params);
+
+  tasking::Executor executor(2);
+  executor.Start();
+  auto future = graph.Launch(executor);
+  const auto &pipeline_output = future.Value<const PipelineOutput &>();
+  ASSERT_TRUE(pipeline_output.workspace.has_event());
+  AccessOrder::host().wait(pipeline_output.workspace.event());
+  ASSERT_EQ(pipeline_output.workspace.NumOutput(), 2);
+  EXPECT_EQ(pipeline_output.workspace.Output<GPUBackend>(0).num_samples(), batch_size);
+  EXPECT_EQ(pipeline_output.workspace.Output<GPUBackend>(1).num_samples(), batch_size);
+}
+
+TEST(ExecNodeTaskCoverageTest, WaitsForMixedCpuOutputEvent) {
+  constexpr int batch_size = 2;
+  auto spec = OpSpec(kCounterOpName)
+                  .AddArg("device", "mixed")
+                  .AddArg("max_batch_size", batch_size)
+                  .AddArg("num_threads", 1)
+                  .AddArg("name", "mixed_cpu_source")
+                  .AddOutput("cpu_output", StorageDevice::CPU);
+
+  ExecGraph graph;
+  auto *source = graph.AddNode(std::make_unique<MixedCpuSource>(spec));
+  auto *output = graph.AddOutputNode();
+  SetOutputDevice(source, 0, StorageDevice::CPU);
+  graph.Link(source, 0, output, 0);
+
+  auto stream = CUDAStreamPool::instance().Get();
+  source->env.order = stream;
+  output->env.order = AccessOrder::host();
+
+  WorkspaceParams params = {};
+  params.max_batch_size = batch_size;
+  params.iter_data = std::make_shared<IterationData>();
+  graph.PrepareIteration(params);
+  source->outputs[0].pinned = true;
+  ASSERT_TRUE(source->outputs[0].pinned);
+
+  tasking::Executor executor(1);
+  executor.Start();
+  auto future = graph.Launch(executor);
+  const auto &pipeline_output = future.Value<const PipelineOutput &>();
+
+  ASSERT_EQ(pipeline_output.workspace.NumOutput(), 1);
+  const auto &cpu_output = pipeline_output.workspace.Output<CPUBackend>(0);
+  ASSERT_EQ(cpu_output.num_samples(), batch_size);
+  for (int sample = 0; sample < batch_size; sample++)
+    EXPECT_EQ(*cpu_output[sample].data<int>(), sample);
+}
+
+TEST(ExecNodeTaskCoverageTest, WaitsForArgumentInputEvents) {
+  constexpr int batch_size = 2;
+  auto source_spec = OpSpec(kCounterOpName)
+                         .AddArg("device", "mixed")
+                         .AddArg("max_batch_size", batch_size)
+                         .AddArg("num_threads", 1)
+                         .AddArg("name", "argument_source")
+                         .AddOutput("argument_data", StorageDevice::CPU);
+  auto make_consumer_spec = [batch_size](std::string name, std::string output) {
+    return OpSpec(kTestOpName)
+        .AddArg("device", "gpu")
+        .AddArg("max_batch_size", batch_size)
+        .AddArg("num_threads", 1)
+        .AddArg("name", std::move(name))
+        .AddArgumentInput("addend", "argument_data")
+        .AddOutput(std::move(output), StorageDevice::GPU);
+  };
+
+  ExecGraph graph;
+  auto *source = graph.AddNode(std::make_unique<MixedCpuSource>(source_spec));
+  auto *consumer0 = graph.AddNode(std::make_unique<DummyOpGPU>(
+      make_consumer_spec("argument_consumer0", "argument_consumer0_out")));
+  auto *consumer1 = graph.AddNode(std::make_unique<DummyOpGPU>(
+      make_consumer_spec("argument_consumer1", "argument_consumer1_out")));
+  auto *output = graph.AddOutputNode();
+
+  SetOutputDevice(source, 0, StorageDevice::CPU);
+  SetOutputDevice(consumer0, 0, StorageDevice::GPU);
+  SetOutputDevice(consumer1, 0, StorageDevice::GPU);
+  graph.Link(source, 0, consumer0, 0);
+  graph.Link(source, 0, consumer1, 0);
+  graph.Link(consumer0, 0, output, 0);
+  graph.Link(consumer1, 0, output, 1);
+
+  auto source_stream = CUDAStreamPool::instance().Get();
+  auto consumer0_stream = CUDAStreamPool::instance().Get();
+  auto consumer1_stream = CUDAStreamPool::instance().Get();
+  auto output_stream = CUDAStreamPool::instance().Get();
+  source->env.order = source_stream;
+  consumer0->env.order = consumer0_stream;
+  consumer1->env.order = consumer1_stream;
+  output->env.order = output_stream;
+
+  WorkspaceParams params = {};
+  params.max_batch_size = batch_size;
+  params.iter_data = std::make_shared<IterationData>();
+  graph.PrepareIteration(params);
+  source->outputs[0].pinned = true;
+
+  tasking::Executor executor(3);
+  executor.Start();
+  auto future = graph.Launch(executor);
+  const auto &pipeline_output = future.Value<const PipelineOutput &>();
+
+  ASSERT_TRUE(pipeline_output.workspace.has_event());
+  AccessOrder::host().wait(pipeline_output.workspace.event());
+  ASSERT_EQ(pipeline_output.workspace.NumOutput(), 2);
+  EXPECT_EQ(pipeline_output.workspace.Output<GPUBackend>(0).num_samples(), batch_size);
+  EXPECT_EQ(pipeline_output.workspace.Output<GPUBackend>(1).num_samples(), batch_size);
 }
 
 }  // namespace test
