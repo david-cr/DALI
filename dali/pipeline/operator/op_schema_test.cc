@@ -1058,4 +1058,70 @@ TEST(OpSchemaTest, OutputMetadataMultiOutput) {
   ASSERT_FALSE(schema.CalculateOutputNDim(0, spec).has_value());
 }
 
+TEST(OpSchemaTest, DefinitionState) {
+  OpSchema schema("CoverageDefinitionState");
+  EXPECT_FALSE(schema.IsDefined());
+
+  EXPECT_EQ(&schema.MakeDefined(), &schema);
+  EXPECT_TRUE(schema.IsDefined());
+  EXPECT_THROW(schema.MakeDefined(), std::logic_error);
+}
+
+TEST(OpSchemaTest, OutputMetadataCallbacksRejectNegativeIndex) {
+  OpSchema schema("CoverageNegativeOutputMetadataIndex");
+  EXPECT_THROW(schema.OutputDTypeFn(-1), std::invalid_argument);
+  EXPECT_THROW(schema.OutputNDimFn(-1), std::invalid_argument);
+  EXPECT_THROW(schema.OutputLayoutFn(-1), std::invalid_argument);
+}
+
+TEST(OpSchemaTest, OutputMetadataDetectsCircularInheritance) {
+  auto &schema = SchemaRegistry::GetSchema("Circular1");
+  EXPECT_THROW(schema.OutputDTypeFn(0), std::logic_error);
+}
+
+DALI_SCHEMA(CoverageExpandedDimsParent)
+  .NumInput(1)
+  .NumOutput(1)
+  .AutoExpandDims("F", true);
+
+DALI_SCHEMA(CoverageExpandedDimsChild)
+  .NumInput(1)
+  .NumOutput(1)
+  .AddParent("CoverageExpandedDimsParent")
+  .AutoExpandDims("C", false);
+
+TEST(OpSchemaTest, ExpandedDimsRejectsIncompatibleInheritance) {
+  auto &schema = SchemaRegistry::GetSchema("CoverageExpandedDimsChild");
+  EXPECT_THROW(schema.ExpandedDims(), std::logic_error);
+}
+
+DALI_SCHEMA(CoverageAutoExpandLayout)
+  .NumInput(2)
+  .NumOutput(1)
+  .AutoExpandDims("FC");
+
+TEST(OpSchemaTest, AutoExpandPreservesInputPrefix) {
+  auto spec = OpSpec("CoverageAutoExpandLayout")
+                  .AddInput("input", StorageDevice::CPU, 3, DALI_FLOAT, "HWC")
+                  .AddInput("reference", StorageDevice::CPU, 4, DALI_FLOAT, "FCHW");
+  auto &schema = SchemaRegistry::GetSchema("CoverageAutoExpandLayout");
+
+  EXPECT_EQ(schema.CalculateOutputLayout(0, spec), TensorLayout("FHWC"));
+}
+
+DALI_SCHEMA(CoverageInconsistentExpandedDims)
+  .NumInput(3)
+  .NumOutput(1)
+  .AutoExpandDims("FC");
+
+TEST(OpSchemaTest, AutoExpandRejectsInconsistentDimensionOrder) {
+  auto spec = OpSpec("CoverageInconsistentExpandedDims")
+                  .AddInput("input", StorageDevice::CPU, 3, DALI_FLOAT, "FHW")
+                  .AddInput("cf_reference", StorageDevice::CPU, 4, DALI_FLOAT, "CFHW")
+                  .AddInput("fc_reference", StorageDevice::CPU, 4, DALI_FLOAT, "FCHW");
+  auto &schema = SchemaRegistry::GetSchema("CoverageInconsistentExpandedDims");
+
+  EXPECT_FALSE(schema.CalculateOutputLayout(0, spec).has_value());
+}
+
 }  // namespace dali
