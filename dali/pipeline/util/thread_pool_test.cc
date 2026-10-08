@@ -20,6 +20,7 @@
 #include <optional>
 #include <stdexcept>
 #include <vector>
+#include "dali/core/call_at_exit.h"
 #include "dali/core/multi_error.h"
 #include "dali/pipeline/util/new_thread_pool.h"
 
@@ -37,6 +38,16 @@ TEST(ThreadPool, AddWork) {
   ASSERT_EQ(count, 0);
   tp.RunAll();
   ASSERT_EQ(count, 64);
+}
+
+TEST(ThreadPool, AddWorkVoidOverload) {
+  OldThreadPool tp(4, CPU_ONLY_DEVICE_ID, false, "OldThreadPool void work test");
+  std::atomic<int> count{0};
+  for (int i = 0; i < 16; i++)
+    tp.AddWork([&count]() { count++; });
+
+  tp.RunAll();
+  EXPECT_EQ(count, 16);
 }
 
 
@@ -247,6 +258,24 @@ TEST(ThreadPool, AffinityMaskInsufficientEntries) {
   } else {
     unsetenv("DALI_AFFINITY_MASK");
   }
+}
+
+TEST(ThreadPool, InvalidAffinityMaskEntryIsReported) {
+  std::optional<std::string> original;
+  if (const char *value = std::getenv("DALI_AFFINITY_MASK"))
+    original = value;
+  auto restore_env = AtScopeExit([&] {
+    if (original)
+      setenv("DALI_AFFINITY_MASK", original->c_str(), 1);
+    else
+      unsetenv("DALI_AFFINITY_MASK");
+  });
+
+  setenv("DALI_AFFINITY_MASK", "not-a-core", 1);
+  OldThreadPool tp(1, 0, true, "OldThreadPool invalid affinity test");
+  tp.AddWork([](int) {});
+
+  EXPECT_THROW(tp.RunAll(), std::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------
