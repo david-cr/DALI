@@ -134,6 +134,27 @@ TEST_P(ToDecibelsCpuTest, ToDecibelsCpuTest) {
   }
 }
 
+TEST(ToDecibelsCpuEdgeCaseTest, ZeroInputWithMaxReference) {
+  using T = float;
+  std::vector<T> input(4, 0.0f);
+  std::vector<T> output(input.size());
+  TensorShape<> shape{static_cast<int64_t>(input.size())};
+
+  InTensorCPU<T, DynamicDimensions> input_view(input.data(), shape);
+  OutTensorCPU<T, DynamicDimensions> output_view(output.data(), shape);
+  ToDecibelsArgs<T> args;
+  args.multiplier = 10.0f;
+  args.min_ratio = 1e-8f;
+  args.ref_max = true;
+
+  KernelContext ctx;
+  ToDecibelsCpu<T> kernel;
+  kernel.Run(ctx, output_view, input_view, args);
+
+  for (T value : output)
+    EXPECT_FLOAT_EQ(value, -80.0f);
+}
+
 INSTANTIATE_TEST_SUITE_P(ToDecibelsCpuTest, ToDecibelsCpuTest, testing::Combine(
     testing::Values(std::array<int64_t, 2>{1, 100},
                     std::array<int64_t, 2>{2, 12}),
