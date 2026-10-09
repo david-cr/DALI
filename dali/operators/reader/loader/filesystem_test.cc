@@ -24,6 +24,8 @@ TEST(JoinPath, File) {
             filesystem::join_path("/path/dir/", "path2"));
   EXPECT_EQ("/path2",
             filesystem::join_path("/path/dir", "/path2"));
+  EXPECT_EQ("/path/dir",
+            filesystem::join_path("/path/dir", ""));
 }
 
 TEST(JoinPath, URI) {
