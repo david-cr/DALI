@@ -133,6 +133,12 @@ TEST(URI, Parse_Error6) {
   // This should trigger display_char with '\a' character in the fragment
 }
 
+TEST(URI, Parse_InvalidCharacterInFragmentAfterQuery) {
+  auto uri = URI::Parse(
+    "http://example.com/path?query#fragment\a");
+  EXPECT_FALSE(uri.valid());
+}
+
 TEST(URI, Parse_Error7) {
   auto uri = URI::Parse(
     "http://example\a.com");
