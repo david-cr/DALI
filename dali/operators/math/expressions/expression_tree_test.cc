@@ -38,6 +38,11 @@ TEST(ExpressionTreeTest, ExpressionTreeNonParsable) {
   ASSERT_THROW(ParseExpressionString("mul(& &)"), std::runtime_error);
 }
 
+TEST(ExpressionTreeTest, InvalidTypeAndNonPrintableToken) {
+  EXPECT_THROW(ParseExpressionString("$0:unknown"), std::runtime_error);
+  EXPECT_THROW(ParseExpressionString(std::string(1, '\x01')), std::runtime_error);
+}
+
 TEST(ExpressionTreeTest, ExpressionTree) {
   std::string expr = "mul(&0 &1)";
   auto result = ParseExpressionString(expr);
