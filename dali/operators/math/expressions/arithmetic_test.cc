@@ -22,6 +22,7 @@
 #include "dali/operators/math/expressions/arithmetic.h"
 #include "dali/operators/math/expressions/arithmetic_meta.h"
 #include "dali/pipeline/data/types.h"
+#include "dali/pipeline/operator/op_schema.h"
 #include "dali/pipeline/pipeline.h"
 #include "dali/test/dali_operator_test.h"
 #include "dali/test/tensor_test_utils.h"
@@ -62,6 +63,30 @@ TEST(ArithmeticOpsTest, TreePropagation) {
   EXPECT_EQ(func[0].GetOutputDesc(), "FT:int16");
   EXPECT_EQ(func[1].GetNodeDesc(), "CC:int32");
   EXPECT_EQ(func[1].GetOutputDesc(), "CC:int32");
+}
+
+TEST(ArithmeticOpsTest, PropagateTypesRejectsInvalidTensorIndex) {
+  std::array<std::optional<DALIDataType>, 1> input_types = {DALI_INT32};
+
+  ExprTensor negative_index(-1);
+  EXPECT_THROW(PropagateTypes(negative_index, make_cspan(input_types)), std::out_of_range);
+
+  ExprTensor out_of_range_index(1);
+  EXPECT_THROW(PropagateTypes(out_of_range_index, make_cspan(input_types)), std::out_of_range);
+}
+
+TEST(ArithmeticOpsTest, PropagateTypesRejectsFunctionWithoutInputs) {
+  ExprFunc no_inputs("add");
+  std::array<std::optional<DALIDataType>, 0> input_types;
+
+  EXPECT_THROW(PropagateTypes(no_inputs, make_cspan(input_types)), std::runtime_error);
+}
+
+TEST(ArithmeticOpsTest, OutputDTypeReturnsUnknownForInvalidExpression) {
+  auto &schema = SchemaRegistry::GetSchema("_ArithmeticGenericOp");
+  auto spec = OpSpec("_ArithmeticGenericOp").AddArg("expression_desc", "invalid expression");
+
+  EXPECT_FALSE(schema.CalculateOutputDType(0, spec).has_value());
 }
 
 
