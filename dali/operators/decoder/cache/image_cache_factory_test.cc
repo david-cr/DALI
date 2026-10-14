@@ -112,5 +112,22 @@ TEST_F(ImageCacheFactoryTest, GetAndRefCount) {
   auto cache03 = factory.Get(0, "threshold", 2*1024*1024, true, 1024);
 }
 
+TEST_F(ImageCacheFactoryTest, InvalidPolicy) {
+  auto &factory = ImageCacheFactory::Instance();
+  constexpr int device_id = 42;
+  ASSERT_FALSE(factory.IsInitialized(device_id));
+
+  EXPECT_THROW(factory.Get(device_id, "invalid", 1024), std::runtime_error);
+  EXPECT_FALSE(factory.IsInitialized(device_id));
+}
+
+TEST_F(ImageCacheFactoryTest, GetMissingCache) {
+  auto &factory = ImageCacheFactory::Instance();
+  constexpr int device_id = 43;
+  ASSERT_FALSE(factory.IsInitialized(device_id));
+
+  EXPECT_THROW(factory.Get(device_id), std::runtime_error);
+}
+
 }  // namespace testing
 }  // namespace dali
